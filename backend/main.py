@@ -1,0 +1,77 @@
+# backend/main.py
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from database import engine,Base
+from logger_config import logger
+
+# Import models so Base knows about every table 
+from models.tenant  import Tenant
+from models.role    import Role
+from models.user    import User
+from models.academic_year import AcademicYear 
+from models.fee import FeeCategory
+from models.master  import (Department,Designation,LeaveType,BookCategory,GradingScheme,DiscountType,SchoolProfile)
+from models.student import Student, Guardian, Grade, Section,Subject, StudentEnrollment
+
+# Imports router
+from routers import auth
+from routers.students import router as students_router
+from routers.upload   import router as upload_router
+from routers.academic import router as academic_router
+from routers.master   import router as master_router
+
+# Auto-create any missing tables on startup
+Base.metadata.create_all(bind=engine)
+
+# Create all tables automatically on startup
+
+app = FastAPI(
+    title="School Management System API",
+    description="Enterprise SMS backend — FastAPI + PostgreSQL",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",   # Vite dev server
+        "http://localhost:3000",   # alternate React dev
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Routers will be uncommented as you build each module ────
+# from routers import auth, students, attendance, fees, exams
+# app.include_router(auth.router,        prefix="/api/auth",        tags=["Auth"])
+# app.include_router(students.router,    prefix="/api/students",    tags=["Students"])
+# app.include_router(attendance.router,  prefix="/api/attendance",  tags=["Attendance"])
+# app.include_router(fees.router,        prefix="/api/fees",        tags=["Fees"])
+# app.include_router(exams.router,       prefix="/api/exams",       tags=["Exams"])
+
+#--------Routers--------------------------------------------
+app.include_router(auth.router,prefix="/api/auth",tags=["Auth"])
+app.include_router(students_router,prefix="/api/students",tags=["Students"])
+app.include_router(upload_router,prefix="/api/upload",tags=["Upload"])
+app.include_router(academic_router, prefix="/api/academic-years", tags=["Academic Years"])
+app.include_router(master_router,   prefix="/api/master",         tags=["Master Data"])
+# Add more as you build each module:
+# from routers import students, attendance, fees
+# app.include_router(students.router,   prefix="/api/students",   tags=["Students"])
+# app.include_router(attendance.router, prefix="/api/attendance", tags=["Attendance"])
+
+@app.get("/health", tags=["Health"])
+def health_check():
+    return {"status": "ok", "service": "SMS API v1.0.0"}
+
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "message": "SMS API is running.",
+        "docs": "/docs",
+        "redoc": "/redoc",
+    }

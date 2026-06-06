@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SMS — School Management System</title>
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+
+    <!-- OverlayScrollbars CSS -->
+    <link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/overlayscrollbars@2.11.0/styles/overlayscrollbars.min.css"
+      crossorigin="anonymous" />
+
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css"
+      crossorigin="anonymous" />
+  </head>
+
+  <!--
+    IMPORTANT: These body classes are required by AdminLTE 4
+    layout-fixed        = fixed sidebar + header
+    sidebar-expand-lg   = sidebar visible on large screens
+    bg-body-tertiary    = AdminLTE background color
+  -->
+  <body class="layout-fixed sidebar-expand-lg bg-body-tertiary">
+    <div id="root"></div>
+
+    <!-- OverlayScrollbars JS (required by AdminLTE sidebar) -->
+    <script src="https://cdn.jsdelivr.net/npm/overlayscrollbars@2.11.0/browser/overlayscrollbars.browser.es6.min.js"
+      crossorigin="anonymous"></script>
+
+    <!-- Popper JS -->
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js"
+      crossorigin="anonymous"></script>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.min.js"
+      crossorigin="anonymous"></script>
+
+    <!-- AdminLTE JS -->
+    <script src="https://cdn.jsdelivr.net/npm/admin-lte@4.0.0/dist/js/adminlte.min.js"
+      crossorigin="anonymous"></script>
+
+    <!-- Init OverlayScrollbars on sidebar -->
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const sidebarWrapper = document.querySelector('.sidebar-wrapper');
+        if (sidebarWrapper && OverlayScrollbarsGlobal?.OverlayScrollbars) {
+          OverlayScrollbarsGlobal.OverlayScrollbars(sidebarWrapper, {
+            scrollbars: { theme: 'os-theme-light', autoHide: 'leave', clickScroll: true },
+          });
+        }
+      });
+    </script>
+
+    <!-- Vite React entry -->
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
