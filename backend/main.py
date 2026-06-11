@@ -9,9 +9,17 @@ from models.tenant  import Tenant
 from models.role    import Role
 from models.user    import User
 from models.academic_year import AcademicYear 
-from models.fee import FeeCategory
+from models.fee           import (              
+    FeeCategory, FeeStructure, FeeInvoice, FeeInvoiceItem, FeePayment
+)
 from models.master  import (Department,Designation,LeaveType,BookCategory,GradingScheme,DiscountType,SchoolProfile)
 from models.student import Student, Guardian, Grade, Section,Subject, StudentEnrollment
+from models.attendance    import (             
+    StudentAttendance, StaffAttendance, Holiday
+)
+from models.exam import (                     
+    ExamType, Exam, ExamSchedule, ExamResult, ReportCard
+)
 
 # Imports router
 from routers import auth
@@ -19,7 +27,12 @@ from routers.students import router as students_router
 from routers.upload   import router as upload_router
 from routers.academic import router as academic_router
 from routers.master   import router as master_router
-
+from routers.attendance import router as attendance_router
+from routers.fees       import router as fees_router
+from routers.reports    import router as reports_router
+from routers.exams      import router as exams_router
+from routers.users      import router as users_router
+from routers.timetable  import router as timetable_router
 # Auto-create any missing tables on startup
 Base.metadata.create_all(bind=engine)
 
@@ -59,6 +72,12 @@ app.include_router(students_router,prefix="/api/students",tags=["Students"])
 app.include_router(upload_router,prefix="/api/upload",tags=["Upload"])
 app.include_router(academic_router, prefix="/api/academic-years", tags=["Academic Years"])
 app.include_router(master_router,   prefix="/api/master",         tags=["Master Data"])
+app.include_router(attendance_router, prefix="/api/attendance",     tags=["Attendance"])
+app.include_router(fees_router,       prefix="/api/fees",           tags=["Fees"])
+app.include_router(reports_router,    prefix="/api/reports",        tags=["Reports"])
+app.include_router(exams_router,      prefix="/api/exams",          tags=["Exams"])
+app.include_router(users_router,      prefix="/api/users",          tags=["Users"])
+app.include_router(timetable_router,  prefix="/api/timetable",      tags=["Timetable"])
 # Add more as you build each module:
 # from routers import students, attendance, fees
 # app.include_router(students.router,   prefix="/api/students",   tags=["Students"])

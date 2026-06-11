@@ -1,11 +1,10 @@
+// frontend/src/components/layout/DashboardLayout.jsx
 import { Outlet } from 'react-router-dom'
 import Sidebar from './Sidebar'
-import Topbar from './Topbar'
-import Footer from './Footer'
+import Topbar  from './Topbar'
 
 export default function DashboardLayout() {
   return (
-    // app-wrapper is the required AdminLTE 4 root div
     <div className="app-wrapper">
       <Topbar />
       <Sidebar />
@@ -19,7 +18,10 @@ export default function DashboardLayout() {
           </div>
         </div>
       </main>
-      <Footer/>
+      <footer className="app-footer">
+        <div className="float-end d-none d-sm-inline">v1.0.0</div>
+        <strong>School Management System</strong> &copy; {new Date().getFullYear()}
+      </footer>
     </div>
   )
 }
