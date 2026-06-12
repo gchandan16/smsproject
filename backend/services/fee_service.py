@@ -234,16 +234,12 @@ class FeeService:
         due_date:         date,
         created_by:       UUID,
     ) -> FeeInvoice:
-        """Auto-generate invoice from the fee structure for a grade."""
+        """Auto-generate invoice from the fee structure for a grade,
+        plus an automatic Transport Fee line if the student is
+        assigned to an active transport route."""
         structures = self.structure_repo.get_for_grade_year(
             tenant_id, grade_id, academic_year_id
         )
-        if not structures:
-            raise HTTPException(
-                404,
-                "No fee structure found for this class and academic year. "
-                "Please set up fee structure in Settings first."
-            )
 
         items = [
             {
@@ -254,6 +250,24 @@ class FeeService:
             for s in structures
         ]
 
+        # ── Auto-add Transport Fee if student has an active route assignment ──
+        transport_item = self._get_transport_fee_item(tenant_id, student_id, academic_year_id)
+        if transport_item:
+            # Avoid duplicate if a manual Transport fee structure also exists
+            already_has_transport = any(
+                "transport" in (i.get("description") or "").lower() for i in items
+            )
+            if not already_has_transport:
+                items.append(transport_item)
+
+        if not items:
+            raise HTTPException(
+                404,
+                "No fee structure found for this class and academic year, "
+                "and the student has no transport assignment. "
+                "Please set up fee structure in Settings first."
+            )
+
         return self.create_invoice(
             tenant_id=tenant_id,
             student_id=student_id,
@@ -262,6 +276,71 @@ class FeeService:
             due_date=due_date,
             created_by=created_by,
         )
+
+    def _get_transport_fee_item(
+        self, tenant_id: UUID, student_id: UUID, academic_year_id: UUID
+    ) -> Optional[dict]:
+        """
+        Look up the student's active transport assignment and return
+        a fee-invoice-item dict for their route/stop fare, or None
+        if the student doesn't use transport.
+        Uses transport_stops.fare if set and > 0, otherwise
+        falls back to transport_routes.fare.
+        """
+        from sqlalchemy import text
+
+        row = self.db.execute(text("""
+            SELECT
+                tr.id    AS route_id,
+                tr.name  AS route_name,
+                tr.route_no,
+                tr.fare  AS route_fare,
+                ts.name  AS stop_name,
+                ts.fare  AS stop_fare
+            FROM student_transport st
+            JOIN transport_routes tr ON tr.id = st.route_id
+            LEFT JOIN transport_stops ts ON ts.id = st.stop_id
+            WHERE st.tenant_id = :tid
+              AND st.student_id = :sid
+              AND st.is_active = true
+              AND (st.academic_year_id = :yr OR st.academic_year_id IS NULL)
+            LIMIT 1
+        """), {"tid": str(tenant_id), "sid": str(student_id), "yr": str(academic_year_id)}).fetchone()
+
+        if not row:
+            return None
+
+        # Prefer stop-specific fare if set and positive, else route fare
+        fare = float(row.stop_fare) if (row.stop_fare and float(row.stop_fare) > 0) else float(row.route_fare or 0)
+        if fare <= 0:
+            return None
+
+        # Find or auto-create a "Transport" fee category so it shows up
+        # correctly in Finance Reports → Transport Fees
+        transport_cat_id = self.db.execute(text("""
+            SELECT id FROM fee_categories
+            WHERE tenant_id = :tid AND name ILIKE '%transport%'
+            LIMIT 1
+        """), {"tid": str(tenant_id)}).scalar()
+
+        if not transport_cat_id:
+            transport_cat_id = self.db.execute(text("""
+                INSERT INTO fee_categories (tenant_id, name, is_recurring, frequency)
+                VALUES (:tid, 'Transport', true, 'monthly')
+                RETURNING id
+            """), {"tid": str(tenant_id)}).scalar()
+            self.db.commit()
+
+        route_label = f"{row.route_no or ''} {row.route_name or ''}".strip()
+        description = f"Transport Fee - {route_label}"
+        if row.stop_name:
+            description += f" ({row.stop_name})"
+
+        return {
+            "fee_category_id": str(transport_cat_id) if transport_cat_id else None,
+            "description":     description,
+            "amount":          fare,
+        }
 
     # ── Helpers ───────────────────────────────────────────────
     def _get_invoice_or_404(self, invoice_id: UUID, tenant_id: UUID) -> FeeInvoice:

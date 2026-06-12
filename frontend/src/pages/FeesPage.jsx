@@ -380,6 +380,7 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState('')
   const [preview,  setPreview]  = useState(null)  // structure preview
+  const [transportPreview, setTransportPreview] = useState(null) // auto transport fee line
 
   useEffect(() => {
     Promise.all([
@@ -424,13 +425,30 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
     }).catch(() => setPreview([]))
   }, [form.grade_id, form.academic_year_id])
 
-  const total = preview?.reduce((sum, s) => sum + parseFloat(s.amount || 0), 0) || 0
+  // Preview auto-added Transport Fee (from student's route/stop assignment)
+  useEffect(() => {
+    if (!form.academic_year_id || !student?.id) { setTransportPreview(null); return }
+    fetch(`/api/fees/transport-preview/${student.id}?academic_year_id=${form.academic_year_id}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    }).then(r => r.json()).then(data => {
+      setTransportPreview(data && data.amount ? data : null)
+    }).catch(() => setTransportPreview(null))
+  }, [form.academic_year_id, student?.id])
+
+  // Skip transport preview if a manual "Transport" structure already covers it
+  const structureHasTransport = preview?.some(s =>
+    (s.category_name || '').toLowerCase().includes('transport')
+  )
+  const showTransportPreview = transportPreview && !structureHasTransport
+
+  const structureTotal = preview?.reduce((sum, s) => sum + parseFloat(s.amount || 0), 0) || 0
+  const total = structureTotal + (showTransportPreview ? parseFloat(transportPreview.amount || 0) : 0)
 
   const handleGenerate = async (e) => {
     e.preventDefault()
     if (!form.grade_id)         { setError('Select a grade'); return }
     if (!form.academic_year_id) { setError('Select an academic year'); return }
-    if (!preview?.length)       {
+    if (!preview?.length && !showTransportPreview) {
       setError('No fee structures found for this grade and year. Go to Settings → Fee Structures first.')
       return
     }
@@ -544,11 +562,47 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
                         Invoice preview — fee structure for this grade
                       </div>
 
-                      {preview.length === 0 ? (
+                      {preview.length === 0 && !showTransportPreview ? (
                         <div className="alert alert-warning py-2 mb-0 small">
                           <i className="bi bi-exclamation-triangle-fill me-2"></i>
                           No fee structures found for this grade and year.
                           Go to <strong>Settings → Fee Structures</strong> to add them.
+                        </div>
+                      ) : preview.length === 0 && showTransportPreview ? (
+                        <div className="border rounded-3 overflow-hidden">
+                          <table className="table table-sm mb-0">
+                            <thead className="table-light">
+                              <tr>
+                                <th>Fee Type</th>
+                                <th>Applies to</th>
+                                <th className="text-end">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr className="table-info">
+                                <td><i className="bi bi-bus-front me-1 text-primary"></i>Transport Fee</td>
+                                <td>
+                                  <span className="badge bg-primary-subtle text-primary border border-primary-subtle small">
+                                    Auto — Route Assignment
+                                  </span>
+                                  <div className="text-muted small mt-1" style={{fontSize:11}}>
+                                    {transportPreview.description}
+                                  </div>
+                                </td>
+                                <td className="text-end fw-medium text-success">
+                                  ₹{parseFloat(transportPreview.amount || 0).toLocaleString('en-IN')}
+                                </td>
+                              </tr>
+                            </tbody>
+                            <tfoot className="table-light">
+                              <tr>
+                                <td colSpan="2" className="fw-bold">Total Invoice Amount</td>
+                                <td className="text-end fw-bold text-primary">
+                                  ₹{total.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
                         </div>
                       ) : (
                         <div className="border rounded-3 overflow-hidden">
@@ -574,6 +628,25 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
                                   </td>
                                 </tr>
                               ))}
+                              {showTransportPreview && (
+                                <tr className="table-info">
+                                  <td>
+                                    <i className="bi bi-bus-front me-1 text-primary"></i>
+                                    Transport Fee
+                                  </td>
+                                  <td>
+                                    <span className="badge bg-primary-subtle text-primary border border-primary-subtle small">
+                                      Auto — Route Assignment
+                                    </span>
+                                    <div className="text-muted small mt-1" style={{fontSize:11}}>
+                                      {transportPreview.description}
+                                    </div>
+                                  </td>
+                                  <td className="text-end fw-medium text-success">
+                                    ₹{parseFloat(transportPreview.amount || 0).toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                              )}
                             </tbody>
                             <tfoot className="table-light">
                               <tr>
@@ -584,6 +657,14 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
                               </tr>
                             </tfoot>
                           </table>
+                        </div>
+                      )}
+
+                      {!showTransportPreview && !structureHasTransport && (
+                        <div className="text-muted small mt-2">
+                          <i className="bi bi-info-circle me-1"></i>
+                          No transport assigned for this student —
+                          assign a route in <strong>Transport → Student Assignments</strong> if applicable.
                         </div>
                       )}
                     </div>

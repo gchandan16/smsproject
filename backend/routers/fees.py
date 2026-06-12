@@ -256,6 +256,22 @@ def create_invoice(
         raise HTTPException(500, f"Failed to create invoice: {str(e)}")
 
 
+@router.get("/transport-preview/{student_id}")
+def transport_fee_preview(
+    student_id:       UUID,
+    academic_year_id: UUID         = Query(...),
+    service: FeeService = Depends(get_service),
+    cu:      User       = Depends(get_current_user),
+):
+    """
+    Returns the transport fee line item that would be auto-added
+    when generating an invoice for this student, or null if the
+    student has no active transport assignment.
+    """
+    item = service._get_transport_fee_item(cu.tenant_id, student_id, academic_year_id)
+    return item
+
+
 @router.post("/invoices/generate", status_code=201)
 def generate_invoice(
     data:    GenerateInvoiceIn,

@@ -15,6 +15,7 @@ import TimetablePage     from './pages/TimetablePage.jsx'
 import LibraryPage       from './pages/LibraryPage.jsx'
 import TransportPage     from './pages/TransportPage.jsx'
 import ReportsPage       from './pages/ReportsPage.jsx'
+import FinanceReportsPage from './pages/FinanceReportsPage.jsx'
 import SettingsPage      from './pages/SettingsPage.jsx'
 
 // Role sets
@@ -80,6 +81,7 @@ export default function App() {
           <Route path="library"   element={<PrivateRoute roles={ADMIN_ROLES}><LibraryPage /></PrivateRoute>} />
           <Route path="transport" element={<PrivateRoute roles={ADMIN_ROLES}><TransportPage /></PrivateRoute>} />
           <Route path="reports"   element={<PrivateRoute roles={ADMIN_ROLES}><ReportsPage /></PrivateRoute>} />
+          <Route path="finance-reports" element={<PrivateRoute roles={FINANCE_ROLES}><FinanceReportsPage /></PrivateRoute>} />
           <Route path="settings"  element={<PrivateRoute roles={ADMIN_ROLES}><SettingsPage /></PrivateRoute>} />
         </Route>
 

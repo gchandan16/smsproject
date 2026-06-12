@@ -53,8 +53,10 @@ function TimetableTab() {
   const [years,    setYears]    = useState([])
   const [grades,   setGrades]   = useState([])
   const [sections, setSections] = useState([])
-  const [subjects, setSubjects] = useState([])
-  const [yearId,   setYearId]   = useState('')
+  const [subjects,  setSubjects]  = useState([])
+  const [teachers,  setTeachers]  = useState([])
+  const [rooms,     setRooms]     = useState([])
+  const [yearId,    setYearId]    = useState('')
   const [gradeId,  setGradeId]  = useState('')
   const [sectionId,setSectionId]= useState('')
   const [grid,     setGrid]     = useState(null)
@@ -71,11 +73,15 @@ function TimetableTab() {
       api.get('/master/academic-years').then(r => r.data),
       api.get('/master/grades').then(r => r.data),
       api.get('/master/subjects').then(r => r.data),
-    ]).then(([y, g, s]) => {
+      api.get('/teachers').then(r => r.data).catch(() => []),
+      api.get('/rooms').then(r => r.data).catch(() => []),
+    ]).then(([y, g, s, t, rm]) => {
       const ys = Array.isArray(y) ? y : []
       setYears(ys)
       setGrades(Array.isArray(g) ? g : [])
       setSubjects(Array.isArray(s) ? s : [])
+      setTeachers(Array.isArray(t) ? t.filter(x => x.is_active) : [])
+      setRooms(Array.isArray(rm) ? rm.filter(x => x.is_active) : [])
       const cur = ys.find(x => x.is_current)
       if (cur) setYearId(cur.id)
     })
@@ -324,23 +330,48 @@ function TimetableTab() {
                               <select className="form-select form-select-sm mb-1"
                                 style={{ fontSize: 11 }}
                                 value={cell.subject_id || ''}
-                                onChange={e => setCell(p.period_id, d.no, 'subject_id', e.target.value)}
+                                onChange={e => {
+                                  setCell(p.period_id, d.no, 'subject_id', e.target.value)
+                                  // Auto-fill teacher if only one teacher teaches this subject
+                                  const subTeachers = teachers.filter(t =>
+                                    (t.subjects || []).some(s => s.subject_id === e.target.value)
+                                  )
+                                  if (subTeachers.length === 1) {
+                                    setCell(p.period_id, d.no, 'teacher_name', subTeachers[0].name)
+                                  }
+                                }}
                                 autoFocus>
                                 <option value="">-- Subject --</option>
                                 {subjects.map(s => (
                                   <option key={s.id} value={s.id}>{s.name}</option>
                                 ))}
                               </select>
-                              <input className="form-control form-control-sm mb-1"
+                              <select className="form-select form-select-sm mb-1"
                                 style={{ fontSize: 11 }}
-                                placeholder="Teacher name"
                                 value={cell.teacher_name || ''}
-                                onChange={e => setCell(p.period_id, d.no, 'teacher_name', e.target.value)} />
-                              <input className="form-control form-control-sm mb-1"
+                                onChange={e => setCell(p.period_id, d.no, 'teacher_name', e.target.value)}>
+                                <option value="">-- Teacher --</option>
+                                {teachers.length > 0
+                                  ? teachers.map(t => (
+                                      <option key={t.id} value={t.name}>{t.name}</option>
+                                    ))
+                                  : <option disabled>No teachers — add in Settings</option>
+                                }
+                              </select>
+                              <select className="form-select form-select-sm mb-1"
                                 style={{ fontSize: 11 }}
-                                placeholder="Room no"
                                 value={cell.room_no || ''}
-                                onChange={e => setCell(p.period_id, d.no, 'room_no', e.target.value)} />
+                                onChange={e => setCell(p.period_id, d.no, 'room_no', e.target.value)}>
+                                <option value="">-- Room --</option>
+                                {rooms.length > 0
+                                  ? rooms.map(r => (
+                                      <option key={r.id} value={r.room_no}>
+                                        {r.name} ({r.room_no})
+                                      </option>
+                                    ))
+                                  : <option disabled>No rooms — add in Settings</option>
+                                }
+                              </select>
                               <div className="d-flex gap-1">
                                 <button className="btn btn-primary btn-sm flex-grow-1"
                                   style={{ fontSize: 10, padding: '1px 4px' }}

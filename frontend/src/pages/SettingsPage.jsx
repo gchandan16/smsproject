@@ -55,6 +55,9 @@ const TABS = [
   { key: 'feecats',      icon: 'bi-cash-coin',        label: 'Fee Categories'   },
   { key: 'bookcats',     icon: 'bi-bookshelf',        label: 'Book Categories'  },
   { key: 'feestructure', icon: 'bi-table',             label: 'Fee Structures'   },
+  { key: 'div_infra',    icon: '',    label: 'INFRASTRUCTURE' },
+  { key: 'teachers',     icon: 'bi-person-video2',   label: 'Teachers'        },
+  { key: 'rooms',        icon: 'bi-door-open',        label: 'Rooms'           },
   { key: 'div_access',   icon: '',    label: 'USER ACCESS' },
   { key: 'users',        icon: 'bi-people-fill',     label: 'User Management' },
 ]
@@ -96,7 +99,7 @@ export default function SettingsPage() {
               <nav className="nav flex-column gap-1">
                 {TABS.map(t => {
                   // Render section headers (no icon, no click)
-                  if (t.key.startsWith('div_') || t.key.startsWith('divider')) {
+                  if (t.key.startsWith('div_') || t.key.startsWith('divider') || t.key === 'div_infra') {
                     return (
                       <div key={t.key}
                         className="px-3 pt-3 pb-1"
@@ -133,6 +136,8 @@ export default function SettingsPage() {
           {tab === 'feecats'      && <FeeCategoriesTab />}
           {tab === 'bookcats'     && <BookCategoriesTab />}
           {tab === 'feestructure' && <FeeStructureTab />}
+          {tab === 'teachers'     && <TeachersTab />}
+          {tab === 'rooms'        && <RoomsTab />}
           {tab === 'users'        && <TabErrorBoundary><UserManagementTab /></TabErrorBoundary>}
         </div>
       </div>
@@ -1378,9 +1383,10 @@ function UserManagementTab() {
           parent:     { icon:'bi-people-fill',      bg:'#f1f5f9', color:'#64748b', desc:"View child's attendance, results and fee status" },
         }
         setApiRoles(roleRes.map(r => ({
-          value: r.name,
-          label: r.name.charAt(0).toUpperCase() + r.name.slice(1),
-          ...(knownMeta[r.name] || { icon:'bi-person-fill', bg:'#f1f5f9', color:'#64748b', desc:'Portal access' }),
+          value: r.name,   // exact DB name - sent to backend as-is
+          label: r.name.charAt(0).toUpperCase() + r.name.slice(1).replace(/_/g, ' '),
+          ...(knownMeta[r.name] || knownMeta[r.name.replace('super','').trim()] || 
+              { icon:'bi-person-fill', bg:'#f1f5f9', color:'#64748b', desc:'Portal access' }),
         })))
       }
     } catch (e) {
@@ -1604,7 +1610,7 @@ function UserManagementTab() {
 }
 
 function UMCreateModal({ roles, onSuccess, onClose }) {
-  const [form, setForm] = useState({ first_name:'', last_name:'', email:'', password:'', role:'teacher', phone:'' })
+  const [form, setForm] = useState({ first_name:'', last_name:'', email:'', password:'', role:'', phone:'' })
   const [saving, setSaving]   = useState(false)
   const [error,  setError]    = useState('')
   const [showPw, setShowPw]   = useState(false)
@@ -1669,7 +1675,9 @@ function UMCreateModal({ roles, onSuccess, onClose }) {
               </div>
               <div className="col-12">
                 <label className="form-label fw-medium small">Role <span className="text-danger">*</span></label>
-                <select className="form-select" value={form.role} required onChange={e => set('role', e.target.value)}>
+                <select className="form-select" value={form.role || roles[0]?.value || ''} required
+                  onChange={e => set('role', e.target.value)}>
+                  <option value="">Select role...</option>
                   {roles.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </select>
               </div>
@@ -1821,6 +1829,519 @@ function UMResetModal({ user, onSuccess, onClose }) {
             )}
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  TEACHERS TAB
+// ─────────────────────────────────────────────────────────────
+function TeachersTab() {
+  const [teachers, setTeachers] = useState([])
+  const [subjects, setSubjects] = useState([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState('')
+  const [success,  setSuccess]  = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editing,  setEditing]  = useState(null)
+  const [form, setForm] = useState({
+    name:'', email:'', phone:'', employee_no:'',
+    department:'', designation:'', is_active: true, subject_ids: []
+  })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    Promise.all([
+      apiFetch('/teachers').catch(() => []),
+      apiFetch('/master/subjects').catch(() => []),
+    ]).then(([t, s]) => {
+      setTeachers(Array.isArray(t) ? t : [])
+      setSubjects(Array.isArray(s) ? s : [])
+      setLoading(false)
+    })
+  }, [])
+
+  const load = async () => {
+    const t = await apiFetch('/teachers').catch(() => [])
+    setTeachers(Array.isArray(t) ? t : [])
+  }
+
+  const openAdd = () => {
+    setEditing(null)
+    setForm({ name:'', email:'', phone:'', employee_no:'',
+              department:'', designation:'', is_active:true, subject_ids:[] })
+    setError('')
+    setShowForm(true)
+  }
+
+  const openEdit = (t) => {
+    setEditing(t)
+    setForm({
+      name:        t.name        || '',
+      email:       t.email       || '',
+      phone:       t.phone       || '',
+      employee_no: t.employee_no || '',
+      department:  t.department  || '',
+      designation: t.designation || '',
+      is_active:   t.is_active,
+      subject_ids: (t.subjects || []).map(s => s.subject_id),
+    })
+    setError('')
+    setShowForm(true)
+  }
+
+  const toggleSubject = (sid) => {
+    setForm(f => ({
+      ...f,
+      subject_ids: f.subject_ids.includes(sid)
+        ? f.subject_ids.filter(x => x !== sid)
+        : [...f.subject_ids, sid],
+    }))
+  }
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    if (!form.name.trim()) { setError('Name is required'); return }
+    setSaving(true); setError('')
+    try {
+      const res = editing
+        ? await apiPut(`/teachers/${editing.id}`, form)
+        : await apiPost('/teachers', form)
+      if (res.ok) {
+        setShowForm(false)
+        setSuccess(editing ? 'Teacher updated!' : 'Teacher added!')
+        setTimeout(() => setSuccess(''), 3000)
+        load()
+      } else {
+        const d = await res.json().catch(() => ({}))
+        setError(d.detail || `Error ${res.status}`)
+      }
+    } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async (t) => {
+    if (!window.confirm(`Delete teacher "${t.name}"?`)) return
+    const res = await fetch(`/api/teachers/${t.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    })
+    if (res.ok || res.status === 204) { load(); setSuccess('Deleted!'); setTimeout(() => setSuccess(''), 2000) }
+    else setError('Delete failed')
+  }
+
+  return (
+    <div className="card border-0 shadow-sm">
+      <div className="card-header bg-white d-flex justify-content-between align-items-center">
+        <span className="fw-semibold">
+          <i className="bi bi-person-video2 me-2 text-primary"></i>
+          Teachers
+          {teachers.length > 0 && <span className="badge bg-secondary ms-2">{teachers.length}</span>}
+        </span>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>
+          <i className="bi bi-plus-lg me-1"></i>Add Teacher
+        </button>
+      </div>
+
+      {/* Inline form */}
+      {showForm && (
+        <div className="card-body border-bottom bg-light">
+          <div className="fw-medium small text-muted mb-3">
+            {editing ? 'Edit Teacher' : 'New Teacher'}
+          </div>
+          <form onSubmit={handleSave}>
+            <div className="row g-3">
+              <div className="col-md-4">
+                <label className="form-label fw-medium small">Full Name *</label>
+                <input className="form-control" value={form.name} required
+                  onChange={e => setForm(f => ({...f, name: e.target.value}))} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label fw-medium small">Email</label>
+                <input type="email" className="form-control" value={form.email}
+                  onChange={e => setForm(f => ({...f, email: e.target.value}))} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label fw-medium small">Phone</label>
+                <input className="form-control" value={form.phone}
+                  onChange={e => setForm(f => ({...f, phone: e.target.value}))} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label fw-medium small">Employee No</label>
+                <input className="form-control" value={form.employee_no} placeholder="EMP001"
+                  onChange={e => setForm(f => ({...f, employee_no: e.target.value}))} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label fw-medium small">Department</label>
+                <input className="form-control" value={form.department}
+                  onChange={e => setForm(f => ({...f, department: e.target.value}))} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label fw-medium small">Designation</label>
+                <input className="form-control" value={form.designation}
+                  onChange={e => setForm(f => ({...f, designation: e.target.value}))} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label fw-medium small">Status</label>
+                <select className="form-select" value={form.is_active}
+                  onChange={e => setForm(f => ({...f, is_active: e.target.value === 'true'}))}>
+                  <option value="true">Active</option>
+                  <option value="false">Inactive</option>
+                </select>
+              </div>
+              {/* Subjects */}
+              <div className="col-12">
+                <label className="form-label fw-medium small">
+                  Subjects Taught
+                  <span className="text-muted ms-1 small">(select all that apply)</span>
+                </label>
+                <div className="d-flex flex-wrap gap-2">
+                  {subjects.map(s => (
+                    <button key={s.id} type="button"
+                      className={`btn btn-sm ${form.subject_ids.includes(s.id) ? 'btn-primary' : 'btn-outline-secondary'}`}
+                      onClick={() => toggleSubject(s.id)}>
+                      {form.subject_ids.includes(s.id) && <i className="bi bi-check me-1"></i>}
+                      {s.name}
+                      {s.code && <span className="ms-1 opacity-75">({s.code})</span>}
+                    </button>
+                  ))}
+                  {subjects.length === 0 && (
+                    <span className="text-muted small">No subjects found. Add them in the Subjects tab first.</span>
+                  )}
+                </div>
+              </div>
+              {error && (
+                <div className="col-12">
+                  <div className="alert alert-danger py-1 mb-0 small">{error}</div>
+                </div>
+              )}
+              <div className="col-auto">
+                <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
+                  {saving ? 'Saving...' : editing ? 'Update' : 'Save Teacher'}
+                </button>
+                <button type="button" className="btn btn-light btn-sm ms-2"
+                  onClick={() => { setShowForm(false); setError('') }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div className="card-body p-0">
+        {success && (
+          <div className="alert alert-success py-2 px-3 mb-0 rounded-0 small border-0">
+            <i className="bi bi-check-circle-fill me-2"></i>{success}
+          </div>
+        )}
+        {loading ? (
+          <div className="text-center py-4"><div className="spinner-border spinner-border-sm text-primary"></div></div>
+        ) : teachers.length === 0 ? (
+          <div className="text-center py-5 text-muted">
+            <i className="bi bi-person-video2 fs-1 d-block mb-3 opacity-25"></i>
+            <h6>No teachers added yet</h6>
+            <small>Click "Add Teacher" to create the teacher master list</small>
+          </div>
+        ) : (
+          <div className="table-responsive">
+            <table className="table table-sm table-hover align-middle mb-0">
+              <thead className="table-light">
+                <tr>
+                  <th>Name</th>
+                  <th>Employee No</th>
+                  <th>Department</th>
+                  <th>Phone</th>
+                  <th>Subjects</th>
+                  <th className="text-center">Status</th>
+                  <th style={{width:90}}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {teachers.map(t => (
+                  <tr key={t.id}>
+                    <td>
+                      <div className="fw-medium small">{t.name}</div>
+                      {t.email && <div className="text-muted" style={{fontSize:10}}>{t.email}</div>}
+                    </td>
+                    <td><code className="small">{t.employee_no || '—'}</code></td>
+                    <td className="text-muted small">{t.department || '—'}</td>
+                    <td className="text-muted small">{t.phone || '—'}</td>
+                    <td>
+                      <div className="d-flex flex-wrap gap-1">
+                        {(t.subjects || []).map(s => (
+                          <span key={s.subject_id} className="badge bg-primary-subtle text-primary border border-primary-subtle small"
+                            style={{fontSize:10}}>
+                            {s.subject_name}
+                          </span>
+                        ))}
+                        {(!t.subjects || t.subjects.length === 0) && (
+                          <span className="text-muted small">—</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="text-center">
+                      {t.is_active
+                        ? <span className="badge bg-success small">Active</span>
+                        : <span className="badge bg-secondary small">Inactive</span>}
+                    </td>
+                    <td>
+                      <div className="btn-group btn-group-sm">
+                        <button className="btn btn-outline-primary" onClick={() => openEdit(t)}>
+                          <i className="bi bi-pencil"></i>
+                        </button>
+                        <button className="btn btn-outline-danger" onClick={() => handleDelete(t)}>
+                          <i className="bi bi-trash"></i>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ROOMS TAB
+// ─────────────────────────────────────────────────────────────
+function RoomsTab() {
+  const [rooms,    setRooms]    = useState([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState('')
+  const [success,  setSuccess]  = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editing,  setEditing]  = useState(null)
+  const [saving,   setSaving]   = useState(false)
+  const [form, setForm] = useState({
+    name:'', room_no:'', room_type:'classroom',
+    capacity: 40, floor_no: null, building:'', is_active: true
+  })
+
+  const ROOM_TYPES = [
+    { value:'classroom', label:'Classroom',  icon:'bi-door-open'    },
+    { value:'lab',       label:'Lab',        icon:'bi-eyedropper'   },
+    { value:'hall',      label:'Hall',       icon:'bi-building'     },
+    { value:'library',   label:'Library',    icon:'bi-book'         },
+    { value:'sports',    label:'Sports',     icon:'bi-trophy'       },
+  ]
+
+  const load = async () => {
+    setLoading(true)
+    const r = await apiFetch('/rooms').catch(() => [])
+    setRooms(Array.isArray(r) ? r : [])
+    setLoading(false)
+  }
+
+  useEffect(() => { load() }, [])
+
+  const openAdd = () => {
+    setEditing(null)
+    setForm({ name:'', room_no:'', room_type:'classroom',
+              capacity:40, floor_no: null, building:'', is_active:true })
+    setError(''); setShowForm(true)
+  }
+
+  const openEdit = (r) => {
+    setEditing(r)
+    setForm({
+      name: r.name, room_no: r.room_no, room_type: r.room_type,
+      capacity: r.capacity || 40, floor_no: r.floor_no !== undefined ? r.floor_no : null,
+      building: r.building || '', is_active: r.is_active,
+    })
+    setError(''); setShowForm(true)
+  }
+
+  const handleSave = async (e) => {
+    e.preventDefault()
+    if (!form.name || !form.room_no) { setError('Name and Room No are required'); return }
+    setSaving(true); setError('')
+    try {
+      const res = editing
+        ? await apiPut(`/rooms/${editing.id}`, form)
+        : await apiPost('/rooms', form)
+      if (res.ok) {
+        setShowForm(false)
+        setSuccess(editing ? 'Room updated!' : 'Room added!')
+        setTimeout(() => setSuccess(''), 3000)
+        load()
+      } else {
+        const d = await res.json().catch(() => ({}))
+        setError(d.detail || `Error ${res.status}`)
+      }
+    } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async (r) => {
+    if (!window.confirm(`Delete room "${r.name}"?`)) return
+    const res = await fetch(`/api/rooms/${r.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    })
+    if (res.ok || res.status === 204) { load(); setSuccess('Deleted!'); setTimeout(() => setSuccess(''), 2000) }
+    else setError('Delete failed')
+  }
+
+  const typeInfo = (type) => ROOM_TYPES.find(t => t.value === type) || ROOM_TYPES[0]
+
+  return (
+    <div className="card border-0 shadow-sm">
+      <div className="card-header bg-white d-flex justify-content-between align-items-center">
+        <span className="fw-semibold">
+          <i className="bi bi-door-open me-2 text-primary"></i>
+          Rooms
+          {rooms.length > 0 && <span className="badge bg-secondary ms-2">{rooms.length}</span>}
+        </span>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>
+          <i className="bi bi-plus-lg me-1"></i>Add Room
+        </button>
+      </div>
+
+      {showForm && (
+        <div className="card-body border-bottom bg-light">
+          <div className="fw-medium small text-muted mb-3">
+            {editing ? 'Edit Room' : 'New Room'}
+          </div>
+          <form onSubmit={handleSave}>
+            <div className="row g-3">
+              <div className="col-md-3">
+                <label className="form-label fw-medium small">Room Name *</label>
+                <input className="form-control" value={form.name}
+                  placeholder="e.g. Maths Lab" required
+                  onChange={e => setForm(f => ({...f, name: e.target.value}))} />
+              </div>
+              <div className="col-md-2">
+                <label className="form-label fw-medium small">Room No *</label>
+                <input className="form-control" value={form.room_no}
+                  placeholder="101" required
+                  onChange={e => setForm(f => ({...f, room_no: e.target.value}))} />
+              </div>
+              <div className="col-md-2">
+                <label className="form-label fw-medium small">Type</label>
+                <select className="form-select" value={form.room_type}
+                  onChange={e => setForm(f => ({...f, room_type: e.target.value}))}>
+                  {ROOM_TYPES.map(t => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="col-md-2">
+                <label className="form-label fw-medium small">Capacity</label>
+                <input type="number" className="form-control"
+                  value={form.capacity || 40} min="1"
+                  onChange={e => setForm(f => ({
+                    ...f,
+                    capacity: parseInt(e.target.value) || 40
+                  }))} />
+              </div>
+              <div className="col-md-1">
+                <label className="form-label fw-medium small">Floor</label>
+                <input type="number" className="form-control"
+                  value={form.floor_no === null || form.floor_no === undefined ? '' : form.floor_no}
+                  min="0" placeholder="0"
+                  onChange={e => setForm(f => ({
+                    ...f,
+                    floor_no: e.target.value === '' ? null : parseInt(e.target.value)
+                  }))} />
+              </div>
+              <div className="col-md-2">
+                <label className="form-label fw-medium small">Building</label>
+                <input className="form-control" value={form.building}
+                  onChange={e => setForm(f => ({...f, building: e.target.value}))} />
+              </div>
+              {error && (
+                <div className="col-12">
+                  <div className="alert alert-danger py-1 mb-0 small">{error}</div>
+                </div>
+              )}
+              <div className="col-auto">
+                <button type="submit" className="btn btn-primary btn-sm" disabled={saving}>
+                  {saving ? 'Saving...' : editing ? 'Update' : 'Save Room'}
+                </button>
+                <button type="button" className="btn btn-light btn-sm ms-2"
+                  onClick={() => { setShowForm(false); setError('') }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div className="card-body p-0">
+        {success && (
+          <div className="alert alert-success py-2 px-3 mb-0 rounded-0 small border-0">
+            <i className="bi bi-check-circle-fill me-2"></i>{success}
+          </div>
+        )}
+        {loading ? (
+          <div className="text-center py-4"><div className="spinner-border spinner-border-sm text-primary"></div></div>
+        ) : rooms.length === 0 ? (
+          <div className="text-center py-5 text-muted">
+            <i className="bi bi-door-open fs-1 d-block mb-3 opacity-25"></i>
+            <h6>No rooms added yet</h6>
+            <small>Click "Add Room" to create the room master list</small>
+          </div>
+        ) : (
+          <div className="table-responsive">
+            <table className="table table-sm table-hover align-middle mb-0">
+              <thead className="table-light">
+                <tr>
+                  <th>Room Name</th>
+                  <th>Room No</th>
+                  <th>Type</th>
+                  <th className="text-center">Capacity</th>
+                  <th>Floor / Building</th>
+                  <th className="text-center">Status</th>
+                  <th style={{width:90}}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rooms.map(r => {
+                  const ti = typeInfo(r.room_type)
+                  return (
+                    <tr key={r.id}>
+                      <td className="fw-medium small">{r.name}</td>
+                      <td><code className="small">{r.room_no}</code></td>
+                      <td>
+                        <span className="badge bg-light text-dark border small">
+                          <i className={`bi ${ti.icon} me-1`}></i>{ti.label}
+                        </span>
+                      </td>
+                      <td className="text-center small">{r.capacity}</td>
+                      <td className="text-muted small">
+                        {r.floor_no !== null ? `Floor ${r.floor_no}` : ''}
+                        {r.building ? ` · ${r.building}` : ''}
+                        {!r.floor_no && !r.building ? '—' : ''}
+                      </td>
+                      <td className="text-center">
+                        {r.is_active
+                          ? <span className="badge bg-success small">Active</span>
+                          : <span className="badge bg-secondary small">Inactive</span>}
+                      </td>
+                      <td>
+                        <div className="btn-group btn-group-sm">
+                          <button className="btn btn-outline-primary" onClick={() => openEdit(r)}>
+                            <i className="bi bi-pencil"></i>
+                          </button>
+                          <button className="btn btn-outline-danger" onClick={() => handleDelete(r)}>
+                            <i className="bi bi-trash"></i>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )

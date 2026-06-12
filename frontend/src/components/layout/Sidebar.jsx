@@ -24,6 +24,7 @@ const MENU = [
     heading: 'FINANCE',
     items: [
       { to: '/fees', icon: 'bi-cash-coin', label: 'Fee Management', roles: ['superadmin','admin','accountant'] },
+      { to: '/finance-reports', icon: 'bi-file-earmark-spreadsheet', label: 'Finance Reports', roles: ['superadmin','admin','accountant'] },
     ],
   },
   {
