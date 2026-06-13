@@ -1334,6 +1334,7 @@ function UserManagementTab() {
   const [showCreate, setShowCreate] = useState(false)
   const [editUser,   setEditUser]   = useState(null)
   const [resetUser,  setResetUser]  = useState(null)
+  const [linkUser,   setLinkUser]   = useState(null)
   const [filterRole, setFilterRole] = useState('')
   const [search,     setSearch]     = useState('')
 
@@ -1416,6 +1417,21 @@ function UserManagementTab() {
       load(); setSuccess('Account reactivated.')
       setTimeout(() => setSuccess(''), 3000)
     } catch { setError('Failed to reactivate') }
+  }
+
+  const unlink = async (u) => {
+    if (!window.confirm(
+      `Unlink ${u.first_name}'s account from ${u.link_info?.linked_name}? ` +
+      `They will lose access to their dashboard until re-linked.`
+    )) return
+    try {
+      const endpoint = u.role === 'student'
+        ? `/users/${u.id}/unlink-student`
+        : `/users/${u.id}/unlink-guardian`
+      const res = await apiPost(endpoint)
+      if (res.ok) { load(); setSuccess('Account unlinked.'); setTimeout(() => setSuccess(''), 3000) }
+      else setError('Failed to unlink')
+    } catch { setError('Failed to unlink') }
   }
 
   const filteredUsers = users.filter(u =>
@@ -1510,8 +1526,9 @@ function UserManagementTab() {
                   <th>Email</th>
                   <th>Role</th>
                   <th className="text-center">Status</th>
+                  <th>Linked Record</th>
                   <th>Last Login</th>
-                  <th style={{ width: 120 }}>Actions</th>
+                  <th style={{ width: 150 }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1543,6 +1560,23 @@ function UserManagementTab() {
                         ? <span className="badge bg-success small">Active</span>
                         : <span className="badge bg-secondary small">Inactive</span>}
                     </td>
+                    <td>
+                      {u.role === 'student' || u.role === 'parent' ? (
+                        u.linked ? (
+                          <div className="small">
+                            <i className="bi bi-link-45deg text-success me-1"></i>
+                            <span className="fw-medium">{u.link_info?.linked_name}</span>
+                            <div className="text-muted" style={{ fontSize: 10 }}>{u.link_info?.linked_detail}</div>
+                          </div>
+                        ) : (
+                          <span className="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle small">
+                            <i className="bi bi-exclamation-triangle me-1"></i>Not Linked
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-muted small">—</span>
+                      )}
+                    </td>
                     <td className="text-muted small">
                       {u.last_login
                         ? new Date(u.last_login).toLocaleDateString('en-IN')
@@ -1550,6 +1584,19 @@ function UserManagementTab() {
                     </td>
                     <td>
                       <div className="btn-group btn-group-sm">
+                        {(u.role === 'student' || u.role === 'parent') && (
+                          u.linked ? (
+                            <button className="btn btn-outline-secondary" title="Unlink record"
+                              onClick={() => unlink(u)}>
+                              <i className="bi bi-link-45deg"></i>
+                            </button>
+                          ) : (
+                            <button className="btn btn-outline-success" title="Link to student/guardian record"
+                              onClick={() => setLinkUser(u)}>
+                              <i className="bi bi-link"></i>
+                            </button>
+                          )
+                        )}
                         <button className="btn btn-outline-primary" title="Edit role"
                           onClick={() => setEditUser(u)}>
                           <i className="bi bi-pencil"></i>
@@ -1605,6 +1652,15 @@ function UserManagementTab() {
           onClose={() => setResetUser(null)}
         />
       )}
+
+      {/* LINK ACCOUNT MODAL */}
+      {linkUser && (
+        <UMLinkModal
+          user={linkUser}
+          onSuccess={() => { setLinkUser(null); load(); setSuccess('Account linked successfully!'); setTimeout(() => setSuccess(''), 3000) }}
+          onClose={() => setLinkUser(null)}
+        />
+      )}
     </div>
   )
 }
@@ -1614,21 +1670,61 @@ function UMCreateModal({ roles, onSuccess, onClose }) {
   const [saving, setSaving]   = useState(false)
   const [error,  setError]    = useState('')
   const [showPw, setShowPw]   = useState(false)
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
+
+  // Student / Guardian linking
+  const [linkSearch, setLinkSearch]     = useState('')
+  const [linkResults, setLinkResults]   = useState([])
+  const [linkSelected, setLinkSelected] = useState(null)
+
+  const set = (k, v) => {
+    setForm(p => ({ ...p, [k]: v }))
+    if (k === 'role') {
+      setLinkSelected(null); setLinkSearch(''); setLinkResults([])
+    }
+  }
   const selectedRole = roles.find(r => r.value === form.role)
+  const needsLink = form.role === 'student' || form.role === 'parent'
+
+  const searchLink = async (q) => {
+    setLinkSearch(q); setLinkSelected(null)
+    if (q.length < 2) { setLinkResults([]); return }
+    try {
+      const endpoint = form.role === 'student'
+        ? '/students/lookup/unlinked-students'
+        : '/students/lookup/unlinked-guardians'
+      const data = await apiFetch(`${endpoint}?search=${encodeURIComponent(q)}`)
+      setLinkResults(Array.isArray(data) ? data : [])
+    } catch { setLinkResults([]) }
+  }
 
   const submit = async (e) => {
     e.preventDefault()
     if (!form.first_name || !form.email || !form.password) { setError('Name, email and password are required'); return }
     if (form.password.length < 6) { setError('Password must be at least 6 characters'); return }
+    if (needsLink && !linkSelected) {
+      setError(form.role === 'student'
+        ? 'Please select which student record this account belongs to'
+        : 'Please select which guardian record this account belongs to')
+      return
+    }
     setSaving(true); setError('')
     try {
       const res = await apiPost('/users/', form)
-      if (res.ok) onSuccess()
-      else {
+      if (!res.ok) {
         const d = await res.json().catch(() => ({}))
         setError(d.detail || `Error ${res.status}`)
+        return
       }
+      const created = await res.json()
+
+      if (needsLink && linkSelected && created?.id) {
+        const linkEndpoint = form.role === 'student'
+          ? `/users/${created.id}/link-student/${linkSelected.id}`
+          : `/users/${created.id}/link-guardian/${linkSelected.id}`
+        await apiPost(linkEndpoint)
+      }
+
+      onSuccess()
     } catch (e) { setError(e.message) }
     finally { setSaving(false) }
   }
@@ -1688,6 +1784,64 @@ function UMCreateModal({ roles, onSuccess, onClose }) {
                     <i className={`bi ${selectedRole.icon} mt-1`}></i>
                     <div><strong>{selectedRole.label}:</strong> {selectedRole.desc}</div>
                   </div>
+                </div>
+              )}
+
+              {needsLink && (
+                <div className="col-12">
+                  <label className="form-label fw-medium small">
+                    {form.role === 'student' ? 'Link to Student Record' : 'Link to Guardian Record'}
+                    <span className="text-danger"> *</span>
+                  </label>
+                  <div className="position-relative">
+                    <input className="form-control" autoComplete="off"
+                      placeholder={form.role === 'student'
+                        ? 'Search by student name or admission no...'
+                        : 'Search by guardian name, phone, or student name...'}
+                      value={linkSearch}
+                      onChange={e => searchLink(e.target.value)} />
+                    {linkResults.length > 0 && (
+                      <div className="border rounded mt-1 bg-white shadow-sm position-absolute w-100"
+                        style={{ zIndex: 20, maxHeight: 180, overflowY: 'auto' }}>
+                        {linkResults.map(item => (
+                          <button key={item.id} type="button"
+                            className="w-100 text-start border-0 px-3 py-2 small bg-white d-flex justify-content-between"
+                            onClick={() => { setLinkSelected(item); setLinkSearch(item.name); setLinkResults([]) }}>
+                            {form.role === 'student' ? (
+                              <>
+                                <span>{item.name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
+                                <span className="text-muted">{item.class}</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>
+                                  {item.name}
+                                  <span className="badge bg-light text-dark border ms-2 text-capitalize" style={{ fontSize: 10 }}>{item.relation}</span>
+                                </span>
+                                <span className="text-muted">of {item.student_name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
+                              </>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {linkSelected ? (
+                    <div className="mt-1 p-2 bg-success bg-opacity-10 rounded small">
+                      <i className="bi bi-check-circle-fill text-success me-1"></i>
+                      {form.role === 'student' ? (
+                        <>Linked to <strong>{linkSelected.name}</strong> <code style={{ fontSize: 10 }}>{linkSelected.admission_no}</code> — {linkSelected.class}</>
+                      ) : (
+                        <>Linked as <strong className="text-capitalize">{linkSelected.relation}</strong> of <strong>{linkSelected.student_name}</strong> <code style={{ fontSize: 10 }}>{linkSelected.admission_no}</code></>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="form-text">
+                      {form.role === 'student'
+                        ? 'Only students without an existing login are shown.'
+                        : 'Only guardians without an existing login are shown.'}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1827,6 +1981,144 @@ function UMResetModal({ user, onSuccess, onClose }) {
                 {saving ? 'Resetting...' : <><i className="bi bi-key me-2"></i>Reset Password</>}
               </button>
             )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  LINK ACCOUNT MODAL — link existing student/parent users to
+//  their students / guardians record (so their dashboard works)
+// ─────────────────────────────────────────────────────────────
+function UMLinkModal({ user, onSuccess, onClose }) {
+  const [search, setSearch]     = useState('')
+  const [results, setResults]   = useState([])
+  const [selected, setSelected] = useState(null)
+  const [saving, setSaving]     = useState(false)
+  const [error, setError]       = useState('')
+
+  const isStudent = user.role === 'student'
+
+  const searchLink = async (q) => {
+    setSearch(q); setSelected(null)
+    if (q.length < 2) { setResults([]); return }
+    try {
+      const endpoint = isStudent
+        ? '/students/lookup/unlinked-students'
+        : '/students/lookup/unlinked-guardians'
+      const data = await apiFetch(`${endpoint}?search=${encodeURIComponent(q)}`)
+      setResults(Array.isArray(data) ? data : [])
+    } catch { setResults([]) }
+  }
+
+  const handleLink = async () => {
+    if (!selected) { setError('Please select a record to link'); return }
+    setSaving(true); setError('')
+    try {
+      const endpoint = isStudent
+        ? `/users/${user.id}/link-student/${selected.id}`
+        : `/users/${user.id}/link-guardian/${selected.id}`
+      const res = await apiPost(endpoint)
+      if (res.ok) onSuccess()
+      else {
+        const d = await res.json().catch(() => ({}))
+        setError(d.detail || `Error ${res.status}`)
+      }
+    } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+
+  const initials = ((user.first_name?.[0] || '') + (user.last_name?.[0] || '')).toUpperCase() || '?'
+
+  return (
+    <div className="modal show d-block" style={{ background: 'rgba(0,0,0,0.5)', zIndex: 1055 }}>
+      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 500 }}>
+        <div className="modal-content border-0 shadow">
+          <div className="modal-header border-0 pb-0">
+            <h5 className="modal-title fw-bold">
+              <i className="bi bi-link-45deg me-2 text-success"></i>Link Account
+            </h5>
+            <button className="btn-close" onClick={onClose}></button>
+          </div>
+          <div className="modal-body">
+            <div className="alert alert-light border small mb-3 d-flex align-items-center gap-2">
+              <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold flex-shrink-0"
+                style={{ width: 30, height: 30, background: '#f1f5f9', color: '#64748b', fontSize: 11 }}>
+                {initials}
+              </div>
+              <div>
+                <strong>{user.first_name} {user.last_name || ''}</strong>
+                <div className="text-muted" style={{ fontSize: 11 }}>{user.email}</div>
+              </div>
+              <span className={`badge ms-auto small ${isStudent ? 'bg-warning text-dark' : 'bg-secondary'}`}>
+                {isStudent ? 'Student' : 'Parent'}
+              </span>
+            </div>
+
+            {error && <div className="alert alert-danger py-2 small mb-3"><i className="bi bi-exclamation-triangle-fill me-2"></i>{error}</div>}
+
+            <label className="form-label fw-medium small">
+              {isStudent ? 'Search Student Record' : 'Search Guardian Record'}
+              <span className="text-danger"> *</span>
+            </label>
+            <div className="position-relative">
+              <input className="form-control" autoComplete="off" autoFocus
+                placeholder={isStudent
+                  ? 'Search by student name or admission no...'
+                  : 'Search by guardian name, phone, or student name...'}
+                value={search}
+                onChange={e => searchLink(e.target.value)} />
+              {results.length > 0 && (
+                <div className="border rounded mt-1 bg-white shadow-sm position-absolute w-100"
+                  style={{ zIndex: 20, maxHeight: 200, overflowY: 'auto' }}>
+                  {results.map(item => (
+                    <button key={item.id} type="button"
+                      className="w-100 text-start border-0 px-3 py-2 small bg-white d-flex justify-content-between"
+                      onClick={() => { setSelected(item); setSearch(item.name); setResults([]) }}>
+                      {isStudent ? (
+                        <>
+                          <span>{item.name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
+                          <span className="text-muted">{item.class}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>
+                            {item.name}
+                            <span className="badge bg-light text-dark border ms-2 text-capitalize" style={{ fontSize: 10 }}>{item.relation}</span>
+                          </span>
+                          <span className="text-muted">of {item.student_name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
+                        </>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {selected ? (
+              <div className="mt-2 p-2 bg-success bg-opacity-10 rounded small">
+                <i className="bi bi-check-circle-fill text-success me-1"></i>
+                {isStudent ? (
+                  <>Will link to <strong>{selected.name}</strong> <code style={{ fontSize: 10 }}>{selected.admission_no}</code> — {selected.class}</>
+                ) : (
+                  <>Will link as <strong className="text-capitalize">{selected.relation}</strong> of <strong>{selected.student_name}</strong> <code style={{ fontSize: 10 }}>{selected.admission_no}</code></>
+                )}
+              </div>
+            ) : (
+              <div className="form-text">
+                {isStudent
+                  ? 'Only students without an existing login are shown.'
+                  : 'Only guardians without an existing login are shown.'}
+              </div>
+            )}
+          </div>
+          <div className="modal-footer border-0 pt-0">
+            <button className="btn btn-light" onClick={onClose}>Cancel</button>
+            <button className="btn btn-success" onClick={handleLink} disabled={saving || !selected}>
+              {saving ? <><span className="spinner-border spinner-border-sm me-2"></span>Linking...</> : <><i className="bi bi-link me-2"></i>Link Account</>}
+            </button>
           </div>
         </div>
       </div>

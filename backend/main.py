@@ -38,6 +38,7 @@ from routers.transport    import router as transport_router
 from routers.library      import router as library_router
 from routers.finance_reports import router as finance_reports_router
 from routers.certificates  import router as certificates_router
+from routers.student_dashboard import router as student_dashboard_router
 # Auto-create any missing tables on startup
 Base.metadata.create_all(bind=engine)
 
@@ -88,6 +89,8 @@ app.include_router(transport_router,    prefix="/api/transport",      tags=["Tra
 app.include_router(library_router,      prefix="/api/library",        tags=["Library"])
 app.include_router(finance_reports_router, prefix="/api/finance-reports", tags=["Finance Reports"])
 app.include_router(certificates_router,    prefix="/api/certificates",   tags=["Certificates"])
+app.include_router(student_dashboard_router, prefix="/api/my", tags=["My Dashboard"])
+
 # Add more as you build each module:
 # from routers import students, attendance, fees
 # app.include_router(students.router,   prefix="/api/students",   tags=["Students"])

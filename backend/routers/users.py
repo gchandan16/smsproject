@@ -109,6 +109,62 @@ def serialize(u: User) -> dict:
     }
 
 
+def attach_link_status(db: Session, tenant_id: UUID, serialized_users: list[dict]) -> list[dict]:
+    """
+    For users with role student/parent, check whether they're linked
+    to a students/guardians record (via user_id) and attach a 'linked' flag
+    plus the linked record's display info.
+    """
+    from sqlalchemy import text, bindparam
+
+    student_ids = [u["id"] for u in serialized_users if u["role"] == "student"]
+    parent_ids  = [u["id"] for u in serialized_users if u["role"] == "parent"]
+
+    student_links = {}
+    if student_ids:
+        sql = text("""
+            SELECT user_id, id, first_name, last_name, admission_no
+            FROM students WHERE tenant_id=:tid AND user_id IN :uids
+        """).bindparams(bindparam("uids", expanding=True))
+        rows = db.execute(sql, {"tid": str(tenant_id), "uids": tuple(student_ids)}).fetchall()
+        for r in rows:
+            student_links[str(r.user_id)] = {
+                "linked_id": str(r.id),
+                "linked_name": f"{r.first_name} {r.last_name or ''}".strip(),
+                "linked_detail": r.admission_no,
+            }
+
+    guardian_links = {}
+    if parent_ids:
+        sql = text("""
+            SELECT gu.user_id, gu.id, gu.first_name, gu.last_name, gu.relation,
+                   s.first_name AS student_first, s.last_name AS student_last, s.admission_no
+            FROM guardians gu
+            JOIN students s ON s.id = gu.student_id
+            WHERE gu.tenant_id=:tid AND gu.user_id IN :uids
+        """).bindparams(bindparam("uids", expanding=True))
+        rows = db.execute(sql, {"tid": str(tenant_id), "uids": tuple(parent_ids)}).fetchall()
+        for r in rows:
+            guardian_links[str(r.user_id)] = {
+                "linked_id": str(r.id),
+                "linked_name": f"{r.first_name} {r.last_name or ''}".strip(),
+                "linked_detail": f"{r.relation} of {r.student_first} {r.student_last or ''} ({r.admission_no})".strip(),
+            }
+
+    for u in serialized_users:
+        if u["role"] == "student":
+            link = student_links.get(u["id"])
+        elif u["role"] == "parent":
+            link = guardian_links.get(u["id"])
+        else:
+            link = None
+
+        u["linked"] = link is not None
+        u["link_info"] = link
+
+    return serialized_users
+
+
 # ── Schemas ───────────────────────────────────────────────────
 class CreateUserIn(BaseModel):
     email:      str
@@ -209,7 +265,8 @@ def list_users(
             User.first_name.ilike(f"%{search}%"),
             User.last_name.ilike(f"%{search}%"),
         ))
-    return [serialize(u) for u in q.order_by(User.created_at.desc()).all()]
+    serialized = [serialize(u) for u in q.order_by(User.created_at.desc()).all()]
+    return attach_link_status(db, cu.tenant_id, serialized)
 
 
 # ── Get one ───────────────────────────────────────────────────
@@ -241,7 +298,7 @@ def create_user(
     user = User(
         tenant_id     = cu.tenant_id,
         email         = data.email,
-        #password_hash = bcrypt.hash(data.password),
+       # password_hash = bcrypt.hash(data.password),
         password_hash = data.password,
         role_id       = role_obj.id,
         first_name    = data.first_name,
@@ -341,3 +398,30 @@ def link_guardian(user_id: UUID, guardian_id: UUID,
     if not g: raise HTTPException(404, "Guardian not found")
     g.user_id = user_id; db.commit()
     return {"message": "Linked"}
+
+
+# ── Unlink student / guardian ─────────────────────────────────
+@router.post("/{user_id}/unlink-student")
+def unlink_student(user_id: UUID,
+    db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
+    require_admin(cu, db)
+    from models.student import Student
+    s = db.query(Student).filter(Student.user_id == user_id, Student.tenant_id == cu.tenant_id).first()
+    if not s:
+        raise HTTPException(404, "No linked student record found for this user")
+    s.user_id = None
+    db.commit()
+    return {"message": "Unlinked"}
+
+
+@router.post("/{user_id}/unlink-guardian")
+def unlink_guardian(user_id: UUID,
+    db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
+    require_admin(cu, db)
+    from models.student import Guardian
+    g = db.query(Guardian).filter(Guardian.user_id == user_id, Guardian.tenant_id == cu.tenant_id).first()
+    if not g:
+        raise HTTPException(404, "No linked guardian record found for this user")
+    g.user_id = None
+    db.commit()
+    return {"message": "Unlinked"}

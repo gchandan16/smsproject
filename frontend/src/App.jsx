@@ -17,12 +17,15 @@ import TransportPage     from './pages/TransportPage.jsx'
 import ReportsPage       from './pages/ReportsPage.jsx'
 import FinanceReportsPage from './pages/FinanceReportsPage.jsx'
 import SettingsPage      from './pages/SettingsPage.jsx'
+import MyTimetablePage   from './pages/MyTimetablePage.jsx'
+import MyFeesPage        from './pages/MyFeesPage.jsx'
 
 // Role sets
 const ADMIN_ROLES       = ['superadmin', 'admin']
 const ACADEMIC_ROLES    = ['superadmin', 'admin', 'teacher']
 const FINANCE_ROLES     = ['superadmin', 'admin', 'accountant']
 const ALL_STAFF_ROLES   = ['superadmin', 'admin', 'teacher', 'accountant']
+const STUDENT_ROLES     = ['student', 'parent']
 
 function PrivateRoute({ children, roles = [] }) {
   const isAuthenticated = useSelector(selectIsAuthenticated)
@@ -54,6 +57,14 @@ export default function App() {
         }>
           {/* Dashboard — all authenticated users */}
           <Route index element={<Dashboard />} />
+
+          {/* Student / Parent personal pages */}
+          <Route path="my-timetable" element={
+            <PrivateRoute roles={STUDENT_ROLES}><MyTimetablePage /></PrivateRoute>
+          } />
+          <Route path="my-fees" element={
+            <PrivateRoute roles={STUDENT_ROLES}><MyFeesPage /></PrivateRoute>
+          } />
 
           {/* Academic — admin + teacher */}
           <Route path="students" element={

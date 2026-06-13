@@ -15,9 +15,16 @@ const MENU = [
     heading: 'ACADEMICS',
     items: [
       { to: '/students',   icon: 'bi-people-fill',          label: 'Students',      roles: ['superadmin','admin','teacher','accountant'] },
-      { to: '/attendance', icon: 'bi-calendar-check-fill',  label: 'Attendance',    roles: ['superadmin','admin','teacher'] },
-      { to: '/timetable',  icon: 'bi-clock-fill',           label: 'Timetable',     roles: ['superadmin','admin','teacher'] },
-      { to: '/exams',      icon: 'bi-clipboard2-check-fill',label: 'Exams & Results',roles: ['superadmin','admin','teacher'] },
+      { to: '/attendance', icon: 'bi-calendar-check',  label: 'Attendance',    roles: ['superadmin','admin','teacher'] },
+      { to: '/timetable',  icon: 'bi-clock',           label: 'Timetable',     roles: ['superadmin','admin','teacher'] },
+      { to: '/exams',      icon: 'bi-journal-check',label: 'Exams & Results',roles: ['superadmin','admin','teacher'] },
+    ],
+  },
+  {
+    heading: 'MY SCHOOL',
+    items: [
+      { to: '/my-timetable', icon: 'bi-clock', label: 'My Timetable', roles: ['student','parent'] },
+      { to: '/my-fees',      icon: 'bi-cash-coin', label: 'My Fees',  roles: ['student','parent'] },
     ],
   },
   {
@@ -30,9 +37,9 @@ const MENU = [
   {
     heading: 'MANAGEMENT',
     items: [
-      { to: '/library',   icon: 'bi-book-fill',          label: 'Library',   roles: ['superadmin','admin'] },
-      { to: '/transport', icon: 'bi-bus-front-fill',     label: 'Transport', roles: ['superadmin','admin'] },
-      { to: '/reports',   icon: 'bi-bar-chart-line-fill',label: 'Reports',   roles: ['superadmin','admin'] },
+      { to: '/library',   icon: 'bi-book',          label: 'Library',   roles: ['superadmin','admin'] },
+      { to: '/transport', icon: 'bi-truck',     label: 'Transport', roles: ['superadmin','admin'] },
+      { to: '/reports',   icon: 'bi-bar-chart-line',label: 'Reports',   roles: ['superadmin','admin'] },
       { to: '/settings',  icon: 'bi-gear-fill',          label: 'Settings',  roles: ['superadmin','admin'] },
     ],
   },

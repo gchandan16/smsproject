@@ -1,7 +1,10 @@
 // frontend/src/pages/Dashboard.jsx
 // Chart.js loaded from CDN via useEffect — no npm install needed
 import { useState, useEffect, useRef } from 'react'
+import { useSelector } from 'react-redux'
 import reportsApi from '../api/reportsApi.js'
+import { selectUserRole } from '../store/slices/authSlice.js'
+import StudentParentDashboard from './StudentParentDashboard.jsx'
 
 // ─────────────────────────────────────────────────────────────
 //  HELPERS
@@ -44,6 +47,21 @@ function loadChartJs(cb) {
 //  MAIN PAGE
 // ─────────────────────────────────────────────────────────────
 export default function DashboardPage() {
+  const userRole = useSelector(selectUserRole)
+  const role = (userRole || '').toLowerCase()
+
+  // Students and parents get a completely different, personalized dashboard
+  if (role === 'student' || role === 'parent') {
+    return <StudentParentDashboard />
+  }
+
+  return <AdminDashboard />
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ADMIN / STAFF DASHBOARD (original)
+// ─────────────────────────────────────────────────────────────
+function AdminDashboard() {
   const [stats,    setStats]    = useState(null)
   const [attTrend, setAttTrend] = useState([])
   const [feeTrend, setFeeTrend] = useState([])

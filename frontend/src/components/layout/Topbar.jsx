@@ -70,7 +70,7 @@ export default function Topbar() {
         {/* Right side */}
         <ul className="navbar-nav ms-auto">
 
-          {/* ── Notifications ─────────────────────────────── */}
+          {/* ── Notifications ─────────────────────────────── 
           <li className="nav-item" ref={notif.ref} style={{ position: 'relative' }}>
             <a className="nav-link" href="#"
               onClick={e => { e.preventDefault(); notif.setOpen(o => !o) }}>
@@ -108,6 +108,7 @@ export default function Topbar() {
               </div>
             )}
           </li>
+          */}
 
           {/* ── User profile ───────────────────────────────── */}
           <li className="nav-item" ref={profile.ref} style={{ position: 'relative' }}>
