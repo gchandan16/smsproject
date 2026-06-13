@@ -10,6 +10,8 @@ class UserInfo(BaseModel):
     role:        str
     tenant_id:   UUID
     tenant_name: str
+    school_name: Optional[str] = None
+    school_logo_url: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -2,7 +2,6 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from logger_config import logger
 
 from database import get_db
 from services.auth_service import AuthService
@@ -30,8 +29,6 @@ def login(
     form: OAuth2PasswordRequestForm = Depends(),
     db:   Session = Depends(get_db),
 ):
-    logger.info(f"Login attempt for email: {form.username} and password :{form.password}")
-
     return AuthService(db).login(
         email=form.username,
         password=form.password,
@@ -43,13 +40,29 @@ def login(
 # Returns current logged-in user info
 # ─────────────────────────────────────────────────────────────
 @router.get("/me", response_model=UserInfo)
-def get_me(current_user: User = Depends(get_current_user)):
+def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # role is the role_name property — safely reads role_obj relationship
+    role = getattr(current_user, "role_name", None) or "staff"
+
+    # School branding comes from school_profile (editable in Settings),
+    # NOT tenants.name (internal account/SaaS identifier).
+    # Fallback to tenant name if no profile has been configured yet.
+    from sqlalchemy import text
+    profile = db.execute(text("""
+        SELECT school_name, logo_url FROM school_profile WHERE tenant_id=:tid
+    """), {"tid": str(current_user.tenant_id)}).fetchone()
+
+    school_name = (profile.school_name if profile and profile.school_name else None) or current_user.tenant.name
+    school_logo = profile.logo_url if profile else None
+
     return UserInfo(
         id=current_user.id,
         email=current_user.email,
-        role=current_user.role.name if current_user.role else "staff",
+        role=role,
         tenant_id=current_user.tenant_id,
         tenant_name=current_user.tenant.name,
+        school_name=school_name,
+        school_logo_url=school_logo,
     )
 
 # ─────────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
 // frontend/src/store/slices/authSlice.js
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
-import authApi from '../../api/authApi'   // ← uses authApi now
+
+const API_BASE = '/api'
 
 // ── Persist helpers ───────────────────────────────────────────
 const loadPersistedAuth = () => {
@@ -14,75 +15,60 @@ const loadPersistedAuth = () => {
   }
 }
 
-const persistAuth = (token, user) => {
-  localStorage.setItem('token', token)
-  localStorage.setItem('user', JSON.stringify(user))
-}
-
-const clearPersistedAuth = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-}
-
-// ── Initial state ─────────────────────────────────────────────
-const initialState = {
-  ...loadPersistedAuth(),
-  loading: false,
-  error:   null,
-}
-
 // ── Async Thunks ──────────────────────────────────────────────
-
-// LOGIN — calls authApi.login()
 export const loginThunk = createAsyncThunk(
   'auth/login',
   async ({ email, password }, { rejectWithValue }) => {
     try {
-   
-      return await authApi.login(email, password)
+      const form = new FormData()
+      form.append('username', email)
+      form.append('password', password)
+
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        body: form,
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        return rejectWithValue(err.detail || 'Login failed')
+      }
+
+      return await res.json()
     } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || 'Incorrect email or password'
-      )
+      return rejectWithValue('Cannot connect to server. Is the backend running?')
     }
   }
 )
 
-// LOGOUT — calls authApi.logout()
 export const logoutThunk = createAsyncThunk(
   'auth/logout',
   async () => {
     try {
-      await authApi.logout()
-    } catch {
-      // Always clear client state even if server call fails
-    }
+      const token = localStorage.getItem('token')
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+    } catch { /* always clear client */ }
   }
 )
 
-// FETCH ME — calls authApi.getMe()
-// Used on app load to verify the stored token is still valid
 export const fetchMeThunk = createAsyncThunk(
   'auth/fetchMe',
   async (_, { rejectWithValue }) => {
     try {
-      return await authApi.getMe()
-    } catch (err) {
-      return rejectWithValue('Session expired. Please login again.')
-    }
-  }
-)
+      const token = localStorage.getItem('token')
+      if (!token) return rejectWithValue('No token')
 
-// CHANGE PASSWORD — calls authApi.changePassword()
-export const changePasswordThunk = createAsyncThunk(
-  'auth/changePassword',
-  async ({ currentPassword, newPassword }, { rejectWithValue }) => {
-    try {
-      return await authApi.changePassword(currentPassword, newPassword)
-    } catch (err) {
-      return rejectWithValue(
-        err.response?.data?.detail || 'Failed to change password'
-      )
+      const res = await fetch(`${API_BASE}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (!res.ok) return rejectWithValue('Session expired')
+      return await res.json()
+    } catch {
+      return rejectWithValue('Network error')
     }
   }
 )
@@ -90,7 +76,11 @@ export const changePasswordThunk = createAsyncThunk(
 // ── Slice ─────────────────────────────────────────────────────
 const authSlice = createSlice({
   name: 'auth',
-  initialState,
+  initialState: {
+    ...loadPersistedAuth(),
+    loading: false,
+    error:   null,
+  },
 
   reducers: {
     clearError: (state) => { state.error = null },
@@ -99,13 +89,13 @@ const authSlice = createSlice({
       state.user    = null
       state.error   = null
       state.loading = false
-      clearPersistedAuth()
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
     },
   },
 
   extraReducers: (builder) => {
-
-    // ── LOGIN ──────────────────────────────────────────────
+    // LOGIN
     builder
       .addCase(loginThunk.pending, (state) => {
         state.loading = true
@@ -117,50 +107,35 @@ const authSlice = createSlice({
         state.token   = access_token
         state.user    = user
         state.error   = null
-        persistAuth(access_token, user)
+        localStorage.setItem('token', access_token)
+        localStorage.setItem('user',  JSON.stringify(user))
       })
       .addCase(loginThunk.rejected, (state, action) => {
         state.loading = false
         state.error   = action.payload
         state.token   = null
         state.user    = null
-        clearPersistedAuth()
       })
 
-    // ── LOGOUT ─────────────────────────────────────────────
-    builder
-      .addCase(logoutThunk.fulfilled, (state) => {
-        state.token   = null
-        state.user    = null
-        state.error   = null
-        clearPersistedAuth()
-      })
+    // LOGOUT
+    builder.addCase(logoutThunk.fulfilled, (state) => {
+      state.token = null
+      state.user  = null
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+    })
 
-    // ── FETCH ME ───────────────────────────────────────────
+    // FETCH ME
     builder
       .addCase(fetchMeThunk.fulfilled, (state, action) => {
         state.user = action.payload
         localStorage.setItem('user', JSON.stringify(action.payload))
       })
       .addCase(fetchMeThunk.rejected, (state) => {
-        // Token is invalid — force full logout
         state.token = null
         state.user  = null
-        clearPersistedAuth()
-      })
-
-    // ── CHANGE PASSWORD ────────────────────────────────────
-    builder
-      .addCase(changePasswordThunk.pending, (state) => {
-        state.loading = true
-        state.error   = null
-      })
-      .addCase(changePasswordThunk.fulfilled, (state) => {
-        state.loading = false
-      })
-      .addCase(changePasswordThunk.rejected, (state, action) => {
-        state.loading = false
-        state.error   = action.payload
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
       })
   },
 })
@@ -177,3 +152,5 @@ export const selectIsAuthenticated = (state) => !!state.auth.token
 export const selectUserRole        = (state) => state.auth.user?.role
 export const selectTenantId        = (state) => state.auth.user?.tenant_id
 export const selectTenantName      = (state) => state.auth.user?.tenant_name
+export const selectSchoolName      = (state) => state.auth.user?.school_name || state.auth.user?.tenant_name
+export const selectSchoolLogoUrl   = (state) => state.auth.user?.school_logo_url

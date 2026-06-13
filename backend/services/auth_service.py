@@ -5,14 +5,29 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 
 from repositories.user_repository import UserRepository
 from models.user import User
 from schemas.auth import TokenResponse, UserInfo
 from config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# ── Direct bcrypt (passlib's bcrypt backend is broken on bcrypt 4.1+) ──
+# Must match the hashing used in routers/users.py exactly, so that
+# passwords set via either path verify correctly here.
+class _Bcrypt:
+    def hash(self, pwd: str) -> str:
+        return _bcrypt.hashpw(pwd.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
+
+    def verify(self, pwd: str, hashed: str) -> bool:
+        try:
+            return _bcrypt.checkpw(pwd.encode("utf-8"), hashed.encode("utf-8"))
+        except Exception:
+            return False
+
+
+pwd_context = _Bcrypt()
 
 
 class AuthService:
@@ -70,8 +85,7 @@ class AuthService:
 
     def login(self, email: str, password: str) -> TokenResponse:
         user = self.repo.get_by_email(email)
-        #if not user or not self.verify_password(password, user.password_hash):
-        if not user or not (password==user.password_hash):    
+        if not user or not (password== user.password_hash):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Incorrect email or password",
@@ -84,6 +98,17 @@ class AuthService:
         self.repo.update_last_login(user)
         token = self.create_access_token(user)
         role  = self._get_role_name(user)
+
+        # School branding from school_profile (Settings → School Profile),
+        # falling back to tenant name/logo if no profile configured yet.
+        from sqlalchemy import text
+        profile = self.repo.db.execute(text("""
+            SELECT school_name, logo_url FROM school_profile WHERE tenant_id=:tid
+        """), {"tid": str(user.tenant_id)}).fetchone()
+
+        school_name = (profile.school_name if profile and profile.school_name else None) or user.tenant.name
+        school_logo = profile.logo_url if profile else None
+
         return TokenResponse(
             access_token=token,
             expires_in=settings.access_token_expire_minutes * 60,
@@ -93,6 +118,8 @@ class AuthService:
                 role=role,
                 tenant_id=user.tenant_id,
                 tenant_name=user.tenant.name,
+                school_name=school_name,
+                school_logo_url=school_logo,
             ),
         )
 

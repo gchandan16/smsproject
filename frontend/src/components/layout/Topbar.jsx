@@ -6,6 +6,7 @@ import {
   logoutThunk,
   selectUser,
   selectTenantName,
+  selectSchoolName,
 } from '../../store/slices/authSlice'
 
 // Toggle sidebar using CSS class — no AdminLTE JS needed
@@ -38,6 +39,7 @@ export default function Topbar() {
   const navigate   = useNavigate()
   const user       = useSelector(selectUser)
   const tenantName = useSelector(selectTenantName)
+  const schoolName = useSelector(selectSchoolName)
 
   const notif  = useDropdown()
   const profile = useDropdown()
@@ -62,7 +64,7 @@ export default function Topbar() {
           <li className="nav-item d-none d-md-block">
             <span className="nav-link fw-semibold text-primary">
               <i className="bi bi-mortarboard-fill me-1"></i>
-              {tenantName || 'School Management System'}
+              { schoolName || 'School Management System'}
             </span>
           </li>
         </ul>
@@ -108,8 +110,7 @@ export default function Topbar() {
               </div>
             )}
           </li>
-          */}
-
+*/}
           {/* ── User profile ───────────────────────────────── */}
           <li className="nav-item" ref={profile.ref} style={{ position: 'relative' }}>
             <a href="#"
@@ -136,7 +137,7 @@ export default function Topbar() {
                 <li className="px-3 py-2 border-bottom">
                   <div className="fw-semibold small">{user?.email}</div>
                   <div className="text-muted" style={{ fontSize: 11 }}>
-                    {user?.role} — {tenantName}
+                    {user?.role} — {schoolName}
                   </div>
                 </li>
                 <li>

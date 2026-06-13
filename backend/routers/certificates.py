@@ -59,11 +59,15 @@ def _get_students(db: Session, cu: User, student_ids: Optional[List[str]] = None
             s.dob, s.gender, s.blood_group, s.photo_url, s.address,
             g.name AS grade_name, sec.name AS section_name,
             se.roll_no,
-            t.name AS school_name, t.logo_url,
+            COALESCE(sp.school_name, t.name) AS school_name,
+            COALESCE(sp.logo_url, t.logo_url) AS logo_url,
+            sp.address AS school_address, sp.phone AS school_phone,
+            sp.affiliation_no, sp.board,
             g_father.first_name AS father_first, g_father.last_name AS father_last, g_father.phone AS father_phone,
             g_mother.first_name AS mother_first, g_mother.last_name AS mother_last, g_mother.phone AS mother_phone
         FROM students s
         JOIN tenants t ON t.id = s.tenant_id
+        LEFT JOIN school_profile sp ON sp.tenant_id = s.tenant_id
         LEFT JOIN student_enrollments se ON se.student_id=s.id AND se.status='active'
         LEFT JOIN sections sec ON sec.id = se.section_id
         LEFT JOIN grades g     ON g.id   = sec.grade_id
@@ -353,8 +357,18 @@ def generate_bonafide(
         cert_no = f"BC/{date.today().year}/{str(idx+1).zfill(4)}"
         body_text, name, cls, today_str, cert_no = _bonafide_text(student, school_name, purpose, cert_no)
 
+        # Build subtitle from real school_profile data when available
+        board = getattr(student, "board", None)
+        affiliation_no = getattr(student, "affiliation_no", None)
+        subtitle_parts = []
+        if board:
+            subtitle_parts.append(f"Affiliated to {board}")
+        if affiliation_no:
+            subtitle_parts.append(f"Affiliation No: {affiliation_no}")
+        subtitle = " &bull; ".join(subtitle_parts) if subtitle_parts else "Affiliated School &bull; Recognised Institution"
+
         elements.append(Paragraph(school_name, title_style))
-        elements.append(Paragraph("Affiliated School &bull; Recognised Institution", sub_style))
+        elements.append(Paragraph(subtitle, sub_style))
         elements.append(Spacer(1, 30))
         elements.append(Paragraph("BONAFIDE CERTIFICATE", cert_title_style))
         elements.append(Paragraph(f"Certificate No: {cert_no}", cert_no_style))
