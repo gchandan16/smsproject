@@ -877,3 +877,176 @@ def gender_attendance_report(
             for r in rows
         ],
     }
+
+
+# ─────────────────────────────────────────────────────────────
+#  ADMISSION TREND  — new admissions by month, with YoY comparison
+# ─────────────────────────────────────────────────────────────
+@router.get("/admissions/trend")
+def admission_trend_report(
+    from_date: date = Query(...),
+    to_date:   date = Query(...),
+    grade_id:  Optional[UUID] = Query(None),
+    db: Session = Depends(get_db),
+    cu: User    = Depends(get_current_user),
+):
+    """
+    Returns month-wise new admission counts for the selected period,
+    plus the same period one year earlier for YoY comparison.
+    """
+    params = {"tid": str(cu.tenant_id), "from": from_date, "to": to_date}
+    extra = ""
+    if grade_id:
+        extra = " AND sec.grade_id = :grade_id"
+        params["grade_id"] = str(grade_id)
+
+    # Current period
+    rows = db.execute(text(f"""
+        SELECT
+            TO_CHAR(s.admitted_on,'YYYY-MM')  AS month,
+            TO_CHAR(s.admitted_on,'Mon YYYY') AS month_label,
+            COUNT(*)::int AS count,
+            COUNT(*) FILTER (WHERE s.gender='male')::int   AS male_count,
+            COUNT(*) FILTER (WHERE s.gender='female')::int AS female_count
+        FROM students s
+        LEFT JOIN student_enrollments se ON se.student_id=s.id
+            AND se.academic_year_id = (
+                SELECT id FROM academic_years
+                WHERE tenant_id=s.tenant_id AND is_current=true LIMIT 1
+            )
+        LEFT JOIN sections sec ON sec.id = se.section_id
+        WHERE s.tenant_id = :tid
+          AND s.admitted_on BETWEEN :from AND :to {extra}
+        GROUP BY TO_CHAR(s.admitted_on,'YYYY-MM'), TO_CHAR(s.admitted_on,'Mon YYYY')
+        ORDER BY month
+    """), params).fetchall()
+
+    # Same period one year earlier (for YoY comparison)
+    from datetime import timedelta
+    prev_from = date(from_date.year - 1, from_date.month, from_date.day)
+    prev_to   = date(to_date.year - 1, to_date.month, to_date.day)
+    prev_params = {"tid": str(cu.tenant_id), "from": prev_from, "to": prev_to}
+    if grade_id:
+        prev_params["grade_id"] = str(grade_id)
+
+    prev_total = db.execute(text(f"""
+        SELECT COUNT(*)::int FROM students s
+        LEFT JOIN student_enrollments se ON se.student_id=s.id
+        LEFT JOIN sections sec ON sec.id = se.section_id
+        WHERE s.tenant_id=:tid AND s.admitted_on BETWEEN :from AND :to {extra}
+    """), prev_params).scalar() or 0
+
+    data = [
+        {
+            "month": r.month_label,
+            "total": r.count,
+            "male":  r.male_count,
+            "female":r.female_count,
+        }
+        for r in rows
+    ]
+    current_total = sum(d["total"] for d in data)
+    yoy_change = (
+        round(((current_total - prev_total) / prev_total) * 100, 1)
+        if prev_total > 0 else None
+    )
+
+    # By grade breakdown
+    grade_rows = db.execute(text("""
+        SELECT g.name AS grade_name, COUNT(*)::int AS count
+        FROM students s
+        JOIN student_enrollments se ON se.student_id=s.id AND se.status='active'
+        JOIN sections sec ON sec.id = se.section_id
+        JOIN grades g     ON g.id   = sec.grade_id
+        WHERE s.tenant_id=:tid AND s.admitted_on BETWEEN :from AND :to
+        GROUP BY g.name, g.order_no
+        ORDER BY g.order_no
+    """), {"tid": str(cu.tenant_id), "from": from_date, "to": to_date}).fetchall()
+
+    return {
+        "period": {"from": str(from_date), "to": str(to_date)},
+        "months": data,
+        "current_total": current_total,
+        "previous_period_total": prev_total,
+        "previous_period": {"from": str(prev_from), "to": str(prev_to)},
+        "yoy_change_pct": yoy_change,
+        "by_grade": [{"grade": r.grade_name, "count": r.count} for r in grade_rows],
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+#  VEHICLE UTILIZATION  — capacity vs assigned students per vehicle
+# ─────────────────────────────────────────────────────────────
+@router.get("/transport/utilization")
+def vehicle_utilization_report(
+    db: Session = Depends(get_db),
+    cu: User    = Depends(get_current_user),
+):
+    """
+    For each vehicle, shows seating capacity vs students currently
+    assigned to its route, plus a utilization percentage.
+    Also flags vehicles approaching/over capacity and unassigned routes.
+    """
+    rows = db.execute(text("""
+        SELECT
+            v.id, v.vehicle_no, v.vehicle_type, v.capacity,
+            v.driver_name, v.is_active AS vehicle_active,
+            r.id AS route_id, r.name AS route_name, r.route_no,
+            COUNT(st.id) FILTER (WHERE st.is_active=true)::int AS assigned_students
+        FROM transport_vehicles v
+        LEFT JOIN transport_routes r ON r.id = v.route_id
+        LEFT JOIN student_transport st ON st.route_id = r.id AND st.is_active=true
+        WHERE v.tenant_id = :tid
+        GROUP BY v.id, v.vehicle_no, v.vehicle_type, v.capacity,
+                 v.driver_name, v.is_active, r.id, r.name, r.route_no
+        ORDER BY v.vehicle_no
+    """), {"tid": str(cu.tenant_id)}).fetchall()
+
+    # Routes with no vehicle assigned
+    unassigned_routes = db.execute(text("""
+        SELECT r.id, r.name, r.route_no,
+               COUNT(st.id) FILTER (WHERE st.is_active=true)::int AS assigned_students
+        FROM transport_routes r
+        LEFT JOIN transport_vehicles v ON v.route_id = r.id
+        LEFT JOIN student_transport st ON st.route_id = r.id
+        WHERE r.tenant_id = :tid AND v.id IS NULL AND r.is_active=true
+        GROUP BY r.id, r.name, r.route_no
+        HAVING COUNT(st.id) FILTER (WHERE st.is_active=true) > 0
+    """), {"tid": str(cu.tenant_id)}).fetchall()
+
+    data = []
+    for r in rows:
+        capacity = r.capacity or 0
+        assigned = r.assigned_students or 0
+        pct = round((assigned / capacity) * 100, 1) if capacity > 0 else 0
+        status = "over" if pct > 100 else ("full" if pct >= 90 else ("low" if pct < 40 else "normal"))
+        data.append({
+            "vehicle_id":        str(r.id),
+            "vehicle_no":        r.vehicle_no,
+            "vehicle_type":      r.vehicle_type,
+            "capacity":          capacity,
+            "assigned_students": assigned,
+            "utilization_pct":   pct,
+            "status":            status,
+            "driver_name":       r.driver_name,
+            "route_name":        r.route_name,
+            "route_no":          r.route_no,
+            "is_active":         r.vehicle_active,
+        })
+
+    total_capacity = sum(d["capacity"] for d in data)
+    total_assigned = sum(d["assigned_students"] for d in data)
+
+    return {
+        "vehicles": data,
+        "total_capacity":  total_capacity,
+        "total_assigned":  total_assigned,
+        "overall_utilization_pct": round((total_assigned/total_capacity)*100, 1) if total_capacity > 0 else 0,
+        "unassigned_routes": [
+            {
+                "route_id": str(r.id), "route_name": r.name,
+                "route_no": r.route_no, "assigned_students": r.assigned_students,
+            }
+            for r in unassigned_routes
+        ],
+    }
