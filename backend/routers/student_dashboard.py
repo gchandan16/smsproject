@@ -39,20 +39,51 @@ def _resolve_student(db: Session, cu: User) -> dict:
     if row:
         return {"student": row, "is_parent": False, "linked_students": None}
 
-    # Try guardian link
+    # Try guardian link — look for guardians where user_id matches this user.
+    # Note: we JOIN on student_id only (not tenant_id) to avoid silent failures
+    # if there's a tenant_id mismatch on the guardian row.
     linked = db.execute(text("""
         SELECT s.id, s.first_name, s.last_name, s.admission_no, s.photo_url,
                s.dob, s.gender, s.blood_group
         FROM guardians gu
         JOIN students s ON s.id = gu.student_id
-        WHERE gu.user_id = :uid AND gu.tenant_id = :tid
+        WHERE gu.user_id  = :uid
+          AND gu.tenant_id = :tid
         ORDER BY s.first_name
     """), {"uid": str(cu.id), "tid": str(cu.tenant_id)}).fetchall()
 
     if linked:
         return {"student": linked[0], "is_parent": True, "linked_students": linked}
 
-    return {"student": None, "is_parent": False, "linked_students": None}
+    # ── Nothing found — gather diagnostic info for the error message ──
+    # Check if a guardian record exists for this tenant but user_id is NULL
+    unlinked_guardian = db.execute(text("""
+        SELECT gu.id, gu.first_name, gu.last_name, gu.relation,
+               s.first_name AS student_first, s.last_name AS student_last,
+               s.admission_no
+        FROM guardians gu
+        JOIN students s ON s.id = gu.student_id
+        WHERE gu.tenant_id = :tid
+          AND gu.user_id IS NULL
+          AND (
+            LOWER(gu.first_name) LIKE LOWER(SPLIT_PART(:email, '@', 1) || '%')
+            OR gu.email = :email
+          )
+        LIMIT 1
+    """), {"tid": str(cu.tenant_id), "email": cu.email}).fetchone()
+
+    hint = ""
+    if unlinked_guardian:
+        hint = (
+            f" A guardian record exists for "
+            f"{unlinked_guardian.first_name} {unlinked_guardian.last_name or ''} "
+            f"({unlinked_guardian.relation} of {unlinked_guardian.student_first} "
+            f"{unlinked_guardian.student_last or ''} — {unlinked_guardian.admission_no}) "
+            f"but it is not linked to your login. Ask the school admin to link your account "
+            f"in Settings → User Management."
+        )
+
+    return {"student": None, "is_parent": False, "linked_students": None, "hint": hint}
 
 
 def _get_current_year(db: Session, cu: User):
@@ -65,14 +96,21 @@ def _get_current_year(db: Session, cu: User):
 def _get_enrollment(db: Session, cu: User, student_id: UUID, year_id):
     return db.execute(text("""
         SELECT se.id AS enrollment_id, se.roll_no, se.section_id,
-               sec.name AS section_name, g.name AS grade_name, g.id AS grade_id
+               sec.name AS section_name, g.name AS grade_name, g.id AS grade_id,
+               se.status
         FROM student_enrollments se
         JOIN sections sec ON sec.id = se.section_id
         JOIN grades g     ON g.id   = sec.grade_id
-        WHERE se.student_id=:sid AND se.tenant_id=:tid
-          AND se.academic_year_id=:yr AND se.status='active'
+        WHERE se.student_id = :sid AND se.tenant_id = :tid
+          AND se.academic_year_id = :yr
+        ORDER BY
+            CASE se.status WHEN 'active' THEN 0 ELSE 1 END
         LIMIT 1
-    """), {"sid": str(student_id), "tid": str(cu.tenant_id), "yr": str(year_id) if year_id else None}).fetchone()
+    """), {
+        "sid": str(student_id),
+        "tid": str(cu.tenant_id),
+        "yr":  str(year_id) if year_id else None,
+    }).fetchone()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -86,7 +124,7 @@ def my_dashboard(
 ):
     resolved = _resolve_student(db, cu)
     if not resolved["student"]:
-        raise HTTPException(404, "No student profile linked to this account. Please contact the school office.")
+        raise HTTPException(404, "No student profile linked to this account." + resolved.get("hint", ""))
 
     # If parent has multiple children and requested a specific one
     student = resolved["student"]
@@ -94,6 +132,17 @@ def my_dashboard(
         match = next((s for s in resolved["linked_students"] if str(s.id) == str(student_id)), None)
         if match:
             student = match
+
+    # DEBUG — log the resolved student so we can verify the IDs are correct
+    import logging
+    _log = logging.getLogger(__name__)
+    _log.warning(
+        f"[my_dashboard] user={cu.id} role={getattr(cu,'role_name','?')} "
+        f"is_parent={resolved['is_parent']} "
+        f"resolved_student_id={student.id} "
+        f"student_name={student.first_name} {student.last_name or ''} "
+        f"tenant_id={cu.tenant_id}"
+    )
 
     year = _get_current_year(db, cu)
     enrollment = _get_enrollment(db, cu, student.id, year.id if year else None)
@@ -257,7 +306,7 @@ def my_timetable(
 ):
     resolved = _resolve_student(db, cu)
     if not resolved["student"]:
-        raise HTTPException(404, "No student profile linked to this account.")
+        raise HTTPException(404, "No student profile linked to this account." + resolved.get("hint", ""))
 
     student = resolved["student"]
     if resolved["is_parent"] and student_id:
@@ -315,7 +364,7 @@ def my_fees(
 ):
     resolved = _resolve_student(db, cu)
     if not resolved["student"]:
-        raise HTTPException(404, "No student profile linked to this account.")
+        raise HTTPException(404, "No student profile linked to this account." + resolved.get("hint", ""))
 
     student = resolved["student"]
     if resolved["is_parent"] and student_id:
@@ -355,3 +404,299 @@ def my_fees(
         })
 
     return {"invoices": result}
+
+
+# ═══════════════════════════════════════════════════════════════
+#  MY ATTENDANCE — student's own attendance history
+# ═══════════════════════════════════════════════════════════════
+@router.get("/attendance")
+def my_attendance(
+    student_id:      Optional[UUID] = None,
+    academic_year_id:Optional[UUID] = None,
+    month:           Optional[int]  = None,   # 1-12, defaults to current month
+    year:            Optional[int]  = None,   # calendar year
+    db:    Session = Depends(get_db),
+    cu:    User    = Depends(get_current_user),
+):
+    resolved = _resolve_student(db, cu)
+    if not resolved["student"]:
+        raise HTTPException(404, "No student profile linked to this account." + resolved.get("hint", ""))
+
+    student = resolved["student"]
+    if resolved["is_parent"] and student_id:
+        match = next((s for s in resolved["linked_students"] if str(s.id) == str(student_id)), None)
+        if match:
+            student = match
+
+    # Resolve academic year
+    yr = None
+    if academic_year_id:
+        yr = db.execute(text("""
+            SELECT id, label FROM academic_years WHERE id=:id AND tenant_id=:tid
+        """), {"id": str(academic_year_id), "tid": str(cu.tenant_id)}).fetchone()
+    if not yr:
+        yr = _get_current_year(db, cu)
+
+    # Get enrollment
+    enr = _get_enrollment(db, cu, student.id, yr.id if yr else None) if yr else None
+
+    today = date.today()
+    cal_month = month or today.month
+    cal_year  = year  or today.year
+
+    # Build month date range
+    import calendar
+    _, days_in_month = calendar.monthrange(cal_year, cal_month)
+    from_date = date(cal_year, cal_month, 1)
+    to_date   = date(cal_year, cal_month, days_in_month)
+
+    # Fetch daily attendance records for this student this month
+    # Use DISTINCT ON (date) to handle period-wise attendance — take the worst status per day
+    # Priority: absent > late > present (so if any period is absent, day shows absent)
+    if enr:
+        records = db.execute(text("""
+            SELECT DISTINCT ON (date)
+                date,
+                status,
+                remarks
+            FROM student_attendance
+            WHERE enrollment_id = :eid
+              AND tenant_id = :tid
+              AND date BETWEEN :from_d AND :to_d
+            ORDER BY date,
+                CASE status
+                    WHEN 'absent'  THEN 1
+                    WHEN 'late'    THEN 2
+                    WHEN 'present' THEN 3
+                    ELSE 4
+                END
+        """), {
+            "eid":    str(enr.enrollment_id),
+            "tid":    str(cu.tenant_id),
+            "from_d": str(from_date),
+            "to_d":   str(to_date),
+        }).fetchall()
+    else:
+        records = []
+
+    # Build a day-keyed map
+    att_map = {str(r.date): {"status": r.status, "remark": r.remarks or ""} for r in records}
+
+    # Monthly summary
+    statuses = [r.status for r in records]
+    present  = statuses.count("present") + statuses.count("late")
+    absent   = statuses.count("absent")
+    late     = statuses.count("late")
+    total    = len(statuses)
+    pct      = round((present / total) * 100, 1) if total > 0 else None
+
+    # Fetch all academic years for the dropdown
+    all_years = db.execute(text("""
+        SELECT id, label, is_current FROM academic_years
+        WHERE tenant_id=:tid ORDER BY start_date DESC
+    """), {"tid": str(cu.tenant_id)}).fetchall()
+
+    # Monthly totals for the whole academic year (for the year overview chart)
+    # Aggregate per-day first (worst status), then count days
+    monthly_summary = []
+    if enr and yr:
+        rows = db.execute(text("""
+            WITH daily AS (
+                SELECT DISTINCT ON (date)
+                    date,
+                    EXTRACT(MONTH FROM date)::int AS m,
+                    EXTRACT(YEAR  FROM date)::int AS y,
+                    status
+                FROM student_attendance
+                WHERE enrollment_id = :eid
+                  AND tenant_id = :tid
+                ORDER BY date,
+                    CASE status
+                        WHEN 'absent'  THEN 1
+                        WHEN 'late'    THEN 2
+                        WHEN 'present' THEN 3
+                        ELSE 4
+                    END
+            )
+            SELECT
+                m, y,
+                COUNT(*) FILTER (WHERE status IN ('present','late')) AS present,
+                COUNT(*) FILTER (WHERE status = 'absent')           AS absent,
+                COUNT(*)                                             AS total
+            FROM daily
+            GROUP BY y, m
+            ORDER BY y, m
+        """), {"eid": str(enr.enrollment_id), "tid": str(cu.tenant_id)}).fetchall()
+
+        import calendar as _cal
+        monthly_summary = [
+            {
+                "month":   r.m,
+                "year":    r.y,
+                "label":   _cal.month_abbr[r.m],
+                "present": r.present,
+                "absent":  r.absent,
+                "total":   r.total,
+                "pct":     round((r.present / r.total) * 100, 1) if r.total > 0 else 0,
+            }
+            for r in rows
+        ]
+
+    return {
+        "student": {
+            "id":           str(student.id),
+            "name":         f"{student.first_name} {student.last_name}",
+            "admission_no": student.admission_no,
+            "class":        f"{enr.grade_name} - {enr.section_name}" if enr else None,
+        },
+        "academic_year": {
+            "id":    str(yr.id)    if yr else None,
+            "label": yr.label      if yr else None,
+        },
+        "all_years": [
+            {"id": str(a.id), "label": a.label, "is_current": a.is_current}
+            for a in all_years
+        ],
+        "month": {
+            "month":         cal_month,
+            "year":          cal_year,
+            "days_in_month": days_in_month,
+            "summary": {
+                "present":  present,
+                "absent":   absent,
+                "late":     late,
+                "total":    total,
+                "pct":      pct,
+            },
+            "days": att_map,   # {"2026-06-01": {"status": "present"}, ...}
+        },
+        "monthly_summary": monthly_summary,
+        "is_parent": resolved["is_parent"],
+        "linked_students": [
+            {"id": str(s.id), "name": f"{s.first_name} {s.last_name}", "admission_no": s.admission_no}
+            for s in (resolved["linked_students"] or [])
+        ],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  ADMIN DIAGNOSTIC — check why a user sees no dashboard data
+#  GET /api/my/check-link?user_id=<uuid>
+# ═══════════════════════════════════════════════════════════════
+@router.get("/check-link")
+def check_link(
+    user_id: UUID,
+    db:  Session = Depends(get_db),
+    cu:  User    = Depends(get_current_user),
+):
+    """
+    Admin/superadmin tool: given any user_id, show exactly how
+    their account links (or fails to link) to student/guardian data.
+    Use this to debug why a parent sees 'No student profile linked'.
+    """
+    from routers.users import require_admin
+    require_admin(cu, db)
+
+    # Get the user
+    target = db.execute(text("""
+        SELECT u.id, u.email, u.first_name, u.last_name, r.name AS role_name
+        FROM users u
+        LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.id = :uid AND u.tenant_id = :tid
+    """), {"uid": str(user_id), "tid": str(cu.tenant_id)}).fetchone()
+
+    if not target:
+        raise HTTPException(404, "User not found")
+
+    result = {
+        "user": {
+            "id":    str(target.id),
+            "email": target.email,
+            "name":  f"{target.first_name} {target.last_name or ''}".strip(),
+            "role":  target.role_name,
+        },
+        "student_link": None,
+        "guardian_links": [],
+        "diagnosis": [],
+    }
+
+    # Check direct student link
+    student_row = db.execute(text("""
+        SELECT s.id, s.first_name, s.last_name, s.admission_no
+        FROM students s WHERE s.user_id = :uid AND s.tenant_id = :tid
+    """), {"uid": str(user_id), "tid": str(cu.tenant_id)}).fetchone()
+
+    if student_row:
+        result["student_link"] = {
+            "id": str(student_row.id),
+            "name": f"{student_row.first_name} {student_row.last_name or ''}".strip(),
+            "admission_no": student_row.admission_no,
+        }
+        result["diagnosis"].append("✅ Student link found — dashboard should work")
+    else:
+        result["diagnosis"].append("❌ No student record linked to this user_id")
+
+    # Check guardian links
+    guardian_rows = db.execute(text("""
+        SELECT gu.id, gu.first_name, gu.last_name, gu.relation,
+               gu.user_id AS linked_user_id,
+               s.first_name AS student_first, s.last_name AS student_last,
+               s.admission_no
+        FROM guardians gu
+        JOIN students s ON s.id = gu.student_id
+        WHERE gu.user_id = :uid AND gu.tenant_id = :tid
+    """), {"uid": str(user_id), "tid": str(cu.tenant_id)}).fetchall()
+
+    if guardian_rows:
+        result["guardian_links"] = [
+            {
+                "guardian_id": str(g.id),
+                "relation": g.relation,
+                "student": f"{g.student_first} {g.student_last or ''} ({g.admission_no})".strip(),
+                "linked_user_id": str(g.linked_user_id),
+            }
+            for g in guardian_rows
+        ]
+        result["diagnosis"].append(f"✅ Guardian link found for {len(guardian_rows)} child(ren) — dashboard should work")
+    else:
+        result["diagnosis"].append("❌ No guardian record linked to this user_id")
+
+    # Check if guardian record EXISTS but user_id is NULL (most common issue)
+    unlinked = db.execute(text("""
+        SELECT gu.id, gu.first_name, gu.last_name, gu.relation,
+               s.first_name AS sf, s.last_name AS sl, s.admission_no
+        FROM guardians gu
+        JOIN students s ON s.id = gu.student_id
+        WHERE gu.tenant_id = :tid
+          AND gu.user_id IS NULL
+          AND (gu.email = :email OR LOWER(gu.first_name || ' ' || COALESCE(gu.last_name,''))
+               LIKE LOWER(:name || '%'))
+    """), {
+        "tid":   str(cu.tenant_id),
+        "email": target.email,
+        "name":  target.first_name,
+    }).fetchall()
+
+    if unlinked:
+        result["unlinked_guardian_matches"] = [
+            {
+                "guardian_id": str(g.id),
+                "name": f"{g.first_name} {g.last_name or ''}".strip(),
+                "relation": g.relation,
+                "student": f"{g.sf} {g.sl or ''} ({g.admission_no})".strip(),
+            }
+            for g in unlinked
+        ]
+        result["diagnosis"].append(
+            f"⚠️ Found {len(unlinked)} guardian record(s) that match by name/email "
+            f"but have user_id = NULL. Go to Settings → User Management → find this "
+            f"user → click the Link 🔗 button to connect them."
+        )
+
+    if not student_row and not guardian_rows:
+        result["diagnosis"].append(
+            "ACTION REQUIRED: Go to Settings → User Management → find this user → "
+            "click the Link 🔗 button next to their name."
+        )
+
+    return result

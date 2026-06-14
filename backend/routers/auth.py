@@ -41,12 +41,8 @@ def login(
 # ─────────────────────────────────────────────────────────────
 @router.get("/me", response_model=UserInfo)
 def get_me(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    # role is the role_name property — safely reads role_obj relationship
     role = getattr(current_user, "role_name", None) or "staff"
 
-    # School branding comes from school_profile (editable in Settings),
-    # NOT tenants.name (internal account/SaaS identifier).
-    # Fallback to tenant name if no profile has been configured yet.
     from sqlalchemy import text
     profile = db.execute(text("""
         SELECT school_name, logo_url FROM school_profile WHERE tenant_id=:tid
@@ -54,6 +50,17 @@ def get_me(current_user: User = Depends(get_current_user), db: Session = Depends
 
     school_name = (profile.school_name if profile and profile.school_name else None) or current_user.tenant.name
     school_logo = profile.logo_url if profile else None
+
+    # Load permissions from role
+    permissions = []
+    if role == "superadmin":
+        permissions = ["**"]
+    elif hasattr(current_user, 'role_obj') and current_user.role_obj is not None:
+        raw = current_user.role_obj.permissions or []
+        permissions = [
+            p for p in raw
+            if isinstance(p, str) and "." in p and ":" not in p and p != "**"
+        ]
 
     return UserInfo(
         id=current_user.id,
@@ -63,6 +70,7 @@ def get_me(current_user: User = Depends(get_current_user), db: Session = Depends
         tenant_name=current_user.tenant.name,
         school_name=school_name,
         school_logo_url=school_logo,
+        permissions=permissions,
     )
 
 # ─────────────────────────────────────────────────────────────

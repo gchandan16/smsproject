@@ -154,3 +154,41 @@ export const selectTenantId        = (state) => state.auth.user?.tenant_id
 export const selectTenantName      = (state) => state.auth.user?.tenant_name
 export const selectSchoolName      = (state) => state.auth.user?.school_name || state.auth.user?.tenant_name
 export const selectSchoolLogoUrl   = (state) => state.auth.user?.school_logo_url
+export const selectPermissions     = (state) => state.auth.user?.permissions || []
+
+/**
+ * selectHasPermission — returns a STABLE checker function.
+ *
+ * The returned `can` function is recreated only when the permissions
+ * array changes (not on every render), fixing the Redux re-render warning.
+ *
+ * Usage:
+ *   const can = useSelector(selectHasPermission)
+ *   if (can('fees.collect')) { ... }
+ *
+ * Rules:
+ *  • ["**"] → superadmin / full access → always true
+ *  • "students.*" wildcard → all actions on that module
+ *  • "students.view" exact match
+ */
+const _permCache = new Map()
+export const selectHasPermission = (state) => {
+  const perms = state.auth.user?.permissions || []
+  const key   = perms.join(',')
+
+  if (_permCache.has(key)) return _permCache.get(key)
+
+  const fn = (permission) => {
+    if (!perms.length) return false
+    if (perms.includes('**')) return true
+    if (perms.includes(permission)) return true
+    const [mod] = permission.split('.')
+    if (perms.includes(`${mod}.*`)) return true
+    return false
+  }
+
+  // Keep cache small — only store the last 3 permission sets
+  if (_permCache.size > 3) _permCache.clear()
+  _permCache.set(key, fn)
+  return fn
+}

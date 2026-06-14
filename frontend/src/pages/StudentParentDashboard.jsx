@@ -22,8 +22,14 @@ export default function StudentParentDashboard() {
     setLoading(true)
     const params = studentId ? { student_id: studentId } : {}
     api.get('/my/dashboard', { params })
-      .then(r => setData(r.data))
-      .catch(e => setErr(e.response?.data?.detail || 'Failed to load dashboard'))
+      .then(r => {
+        console.log('[StudentDashboard] API response:', JSON.stringify(r.data, null, 2))
+        setData(r.data)
+      })
+      .catch(e => {
+        console.error('[StudentDashboard] Error:', e.response?.data)
+        setErr(e.response?.data?.detail || 'Failed to load dashboard')
+      })
       .finally(() => setLoading(false))
   }
 
@@ -36,8 +42,25 @@ export default function StudentParentDashboard() {
 
   if (loading) return <Spinner />
   if (err) return (
-    <div className="alert alert-warning">
-      <i className="bi bi-info-circle me-2"></i>{err}
+    <div className="container-fluid py-4" style={{ maxWidth: 640 }}>
+      <div className="card border-0 shadow-sm">
+        <div className="card-body text-center py-5">
+          <i className="bi bi-person-x-fill text-warning d-block mb-3" style={{ fontSize: 48 }}></i>
+          <h5 className="fw-bold mb-2">No student profile linked</h5>
+          <p className="text-muted mb-3" style={{ fontSize: 14 }}>
+            {err.includes('guardian record exists')
+              ? err
+              : 'Your account is not yet linked to a student or guardian record.'}
+          </p>
+          <div className="alert alert-info text-start" style={{ fontSize: 13 }}>
+            <i className="bi bi-info-circle-fill me-2"></i>
+            <strong>What to do:</strong> Ask your school administrator to go to
+            <strong> Settings → User Management</strong>, find your account,
+            and click the <i className="bi bi-link"></i> Link button to connect it
+            to the correct student or guardian record.
+          </div>
+        </div>
+      </div>
     </div>
   )
   if (!data) return null
@@ -81,13 +104,37 @@ export default function StudentParentDashboard() {
             <div className="fw-bold fs-5">{student.name}</div>
             <div className="text-muted small">
               <code className="me-2">{student.admission_no}</code>
-              <span className="badge bg-light text-dark border me-2">{student.class}</span>
+              {student.class !== '—'
+                ? <span className="badge bg-light text-dark border me-2">{student.class}</span>
+                : <span className="badge bg-warning text-dark border me-2">Class not assigned</span>
+              }
               {student.roll_no && <span className="me-2">Roll No: {student.roll_no}</span>}
               {student.blood_group && <span>Blood Group: {student.blood_group}</span>}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Show clear warning when enrollment is missing */}
+      {student.class === '—' && (
+        <div className="alert alert-warning d-flex gap-3 align-items-start mb-4">
+          <i className="bi bi-exclamation-triangle-fill fs-5 flex-shrink-0 mt-1"></i>
+          <div className="flex-fill">
+            <strong>No class enrollment found for {student.name} ({student.admission_no})</strong>
+            <div className="small mt-1 text-muted">
+              Attendance, timetable, and fee data cannot be shown until this student is enrolled in a class for the current academic year.
+            </div>
+            <div className="d-flex gap-2 mt-2 flex-wrap">
+              <a href="/students" className="btn btn-sm btn-warning fw-semibold">
+                <i className="bi bi-person-plus me-1"></i>Go to Students → Enroll
+              </a>
+              <a href="/settings?tab=users" className="btn btn-sm btn-outline-secondary">
+                <i className="bi bi-arrow-left-right me-1"></i>Check account link in User Management
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="row g-3 mb-4">
@@ -102,6 +149,9 @@ export default function StudentParentDashboard() {
               <div className="text-muted small">
                 {attendance.present} present / {attendance.total} days
               </div>
+              <Link to="/my-attendance" className="small fw-medium text-success d-block mt-2">
+                View full attendance →
+              </Link>
             </div>
           </div>
         </div>

@@ -109,6 +109,18 @@ class AuthService:
         school_name = (profile.school_name if profile and profile.school_name else None) or user.tenant.name
         school_logo = profile.logo_url if profile else None
 
+        # Load dynamic permissions from the role row in the DB.
+        # Superadmin gets ["**"] sentinel → frontend treats as "all permissions".
+        permissions = []
+        if role == "superadmin":
+            permissions = ["**"]
+        elif hasattr(user, 'role_obj') and user.role_obj is not None:
+            raw = user.role_obj.permissions or []
+            # Only include new-format "module.action" strings (not legacy "module:*" format)
+            permissions = [
+                p for p in raw
+                if isinstance(p, str) and "." in p and ":" not in p and p != "**"
+            ]
         return TokenResponse(
             access_token=token,
             expires_in=settings.access_token_expire_minutes * 60,
@@ -120,6 +132,7 @@ class AuthService:
                 tenant_name=user.tenant.name,
                 school_name=school_name,
                 school_logo_url=school_logo,
+                permissions=permissions,
             ),
         )
 

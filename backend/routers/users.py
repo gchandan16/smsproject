@@ -221,7 +221,7 @@ def change_own_password(
     cu: User    = Depends(get_current_user),
 ):
     #if not bcrypt.verify(data.current_password, cu.password_hash):
-    if data.current_password!=cu.password_hash:
+    if not (data.current_password!=cu.password_hash):
         raise HTTPException(400, "Current password is incorrect")
     #cu.password_hash = bcrypt.hash(data.new_password)
     cu.password_hash = data.new_password
@@ -301,13 +301,23 @@ def get_permission_schema(
 ):
     """
     Returns the full list of modules + actions from the permission_modules table.
-    This is the single source of truth for what permissions exist.
+    Auto-seeds the table on first call if it is empty — no manual script needed.
     Superadmin only.
     """
     if get_role_name(cu, db) != "superadmin":
         raise HTTPException(403, "Superadmin access required")
 
     from sqlalchemy import text as _t
+
+    # ── Auto-seed if table is empty ──────────────────────────────────────
+    count = db.execute(_t("""
+        SELECT COUNT(*) FROM permission_modules WHERE tenant_id = :tid
+    """), {"tid": str(cu.tenant_id)}).scalar()
+
+    if count == 0:
+        _seed_permission_modules(db, cu.tenant_id)
+
+    # ── Fetch and return ─────────────────────────────────────────────────
     rows = db.execute(_t("""
         SELECT module_key, module_label, module_icon, module_order,
                action_key, action_label
@@ -317,7 +327,6 @@ def get_permission_schema(
         ORDER BY module_order, module_key, action_key
     """), {"tid": str(cu.tenant_id)}).fetchall()
 
-    # Group into {module_key: {label, icon, order, actions: [...]}}
     modules = {}
     for r in rows:
         if r.module_key not in modules:
@@ -336,20 +345,185 @@ def get_permission_schema(
     return sorted(modules.values(), key=lambda m: m["order"])
 
 
+@router.post("/permission-schema/seed")
+def seed_permission_schema(
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    """Force re-seed permission_modules and role_default_permissions for this tenant.
+    Safe to call multiple times — uses INSERT ... ON CONFLICT DO UPDATE."""
+    if get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+    count = _seed_permission_modules(db, cu.tenant_id)
+    return {"seeded": True, "rows": count}
+
+
+def _seed_permission_modules(db, tenant_id) -> int:
+    """Insert all module/action definitions and role defaults into the DB.
+    Uses ON CONFLICT DO UPDATE so it is idempotent and safe to re-run."""
+    import uuid as _uuid
+    from sqlalchemy import text as _t
+
+    tid = str(tenant_id)
+
+    MODULES = [
+        ("dashboard",       "Dashboard",               "bi-speedometer2",           1, [
+            ("view",        "View dashboard"),
+        ]),
+        ("students",        "Students & Admissions",   "bi-mortarboard",            2, [
+            ("view",        "View student profiles"),
+            ("create",      "Add new students"),
+            ("edit",        "Edit student profiles"),
+            ("delete",      "Delete / deactivate students"),
+        ]),
+        ("attendance",      "Attendance",              "bi-clipboard-check",        3, [
+            ("view",        "View attendance records"),
+            ("mark",        "Mark / edit attendance"),
+        ]),
+        ("timetable",       "Timetable",               "bi-calendar3",              4, [
+            ("view",        "View timetables"),
+            ("edit",        "Build / edit timetables"),
+        ]),
+        ("fees",            "Fee Management",          "bi-cash-coin",              5, [
+            ("view",        "View invoices and payments"),
+            ("generate",    "Generate invoices"),
+            ("collect",     "Collect / record payments"),
+            ("cancel",      "Cancel invoices"),
+        ]),
+        ("finance_reports", "Finance Reports",         "bi-bar-chart-line",         6, [
+            ("view",        "View finance reports"),
+            ("export",      "Export to Excel and PDF"),
+        ]),
+        ("exams",           "Exams & Results",         "bi-journal-text",           7, [
+            ("view",        "View exams and results"),
+            ("create",      "Create / schedule exams"),
+            ("enter_marks", "Enter marks"),
+            ("publish",     "Publish results / report cards"),
+        ]),
+        ("transport",       "Transport",               "bi-bus-front",              8, [
+            ("view",        "View routes, vehicles, students"),
+            ("manage",      "Add / edit routes, stops, vehicles"),
+            ("assign",      "Assign students to routes"),
+        ]),
+        ("library",         "Library",                 "bi-book",                   9, [
+            ("view",        "View books and members"),
+            ("issue",       "Issue and return books"),
+            ("manage",      "Add / edit books and categories"),
+        ]),
+        ("reports",         "Reports & Certificates",  "bi-file-earmark-bar-graph", 10, [
+            ("view",        "View all reports"),
+            ("id_cards",    "Generate ID cards"),
+            ("certificates","Generate bonafide certificates"),
+        ]),
+        ("settings",        "Settings",                "bi-gear",                   11, [
+            ("view",        "View settings"),
+            ("school",      "Edit school profile"),
+            ("academic",    "Manage academic years, grades, sections"),
+            ("fee_setup",   "Manage fee categories and structures"),
+            ("users",       "Manage users and logins"),
+            ("permissions", "Manage role permissions (Superadmin only)"),
+        ]),
+    ]
+
+    ROLE_DEFAULTS = {
+        "admin": [
+            "dashboard.view",
+            "students.view","students.create","students.edit",
+            "attendance.view","attendance.mark",
+            "timetable.view","timetable.edit",
+            "fees.view","fees.generate","fees.collect",
+            "finance_reports.view","finance_reports.export",
+            "exams.view","exams.create","exams.enter_marks","exams.publish",
+            "transport.view","transport.manage","transport.assign",
+            "library.view","library.issue","library.manage",
+            "reports.view","reports.id_cards","reports.certificates",
+            "settings.view","settings.school","settings.academic",
+            "settings.fee_setup","settings.users",
+        ],
+        "accountant": [
+            "dashboard.view",
+            "students.view",
+            "fees.view","fees.generate","fees.collect",
+            "finance_reports.view","finance_reports.export",
+            "transport.view",
+            "reports.view",
+            "settings.view",
+        ],
+        "teacher": [
+            "dashboard.view",
+            "students.view",
+            "attendance.view","attendance.mark",
+            "timetable.view",
+            "exams.view","exams.enter_marks",
+            "transport.view",
+            "library.view",
+            "settings.view",
+        ],
+        "parent":  ["dashboard.view"],
+        "student": ["dashboard.view"],
+    }
+
+    rows_inserted = 0
+
+    for (mkey, mlabel, micon, morder, actions) in MODULES:
+        for (akey, alabel) in actions:
+            db.execute(_t("""
+                INSERT INTO permission_modules
+                    (id, tenant_id, module_key, module_label, module_icon,
+                     module_order, action_key, action_label, is_active)
+                VALUES
+                    (:id, :tid, :mkey, :mlabel, :micon,
+                     :morder, :akey, :alabel, true)
+                ON CONFLICT (tenant_id, module_key, action_key)
+                DO UPDATE SET
+                    module_label = EXCLUDED.module_label,
+                    module_icon  = EXCLUDED.module_icon,
+                    module_order = EXCLUDED.module_order,
+                    action_label = EXCLUDED.action_label,
+                    is_active    = true
+            """), {
+                "id": str(_uuid.uuid4()), "tid": tid,
+                "mkey": mkey, "mlabel": mlabel, "micon": micon,
+                "morder": morder, "akey": akey, "alabel": alabel,
+            })
+            rows_inserted += 1
+
+    for role_name, perms in ROLE_DEFAULTS.items():
+        for perm in perms:
+            db.execute(_t("""
+                INSERT INTO role_default_permissions
+                    (id, tenant_id, role_name, permission)
+                VALUES (:id, :tid, :rname, :perm)
+                ON CONFLICT (tenant_id, role_name, permission) DO NOTHING
+            """), {
+                "id": str(_uuid.uuid4()), "tid": tid,
+                "rname": role_name, "perm": perm,
+            })
+
+    db.commit()
+    return rows_inserted
+
+
 @router.get("/role-defaults/{role_name}")
 def get_role_defaults(
     role_name: str,
     db: Session = Depends(get_db),
     cu: User = Depends(get_current_user),
 ):
-    """
-    Returns the default permissions for a named role from role_default_permissions table.
-    Used by the UI's 'Apply Defaults' button — purely a convenience, not enforced.
-    """
+    """Returns the default permissions for a named role.
+    Auto-seeds if table is empty."""
     if get_role_name(cu, db) != "superadmin":
         raise HTTPException(403, "Superadmin access required")
 
     from sqlalchemy import text as _t
+
+    # Auto-seed if defaults table is empty
+    count = db.execute(_t("""
+        SELECT COUNT(*) FROM role_default_permissions WHERE tenant_id = :tid
+    """), {"tid": str(cu.tenant_id)}).scalar()
+    if count == 0:
+        _seed_permission_modules(db, cu.tenant_id)
+
     rows = db.execute(_t("""
         SELECT permission FROM role_default_permissions
         WHERE (tenant_id = :tid OR tenant_id IS NULL)
@@ -408,21 +582,25 @@ def update_role_permissions(
         raise HTTPException(404, "Role not found")
     if role.name.lower() == "superadmin":
         raise HTTPException(400, "Superadmin permissions cannot be restricted")
-    # Only allow permissions that actually exist in permission_modules
-    from sqlalchemy import text as _t
-    valid_keys = {
-        r.permission for r in db.execute(_t("""
-            SELECT module_key || '.' || action_key AS permission
-            FROM permission_modules
-            WHERE (tenant_id = :tid OR tenant_id IS NULL) AND is_active = true
-        """), {"tid": str(cu.tenant_id)}).fetchall()
-    }
-    valid = [p.lower().strip() for p in data.permissions
-             if isinstance(p, str) and p.lower().strip() in valid_keys]
+
+    # Accept any string in "module.action" dot format.
+    # We do NOT validate against permission_modules here because that table
+    # may not be seeded yet — we never want to silently discard permissions.
+    valid = [
+        p.lower().strip()
+        for p in data.permissions
+        if isinstance(p, str) and "." in p.strip() and len(p.strip()) > 2
+    ]
+
     role.permissions = valid
     db.commit()
     db.refresh(role)
-    return {"id": str(role.id), "name": role.name, "permissions": role.permissions}
+    return {
+        "id":          str(role.id),
+        "name":        role.name,
+        "permissions": role.permissions,
+        "saved_count": len(valid),
+    }
 
 
 
@@ -537,7 +715,7 @@ def reset_password(
     user = get404(db, user_id, cu.tenant_id)
     _block_superadmin_target(db, user, cu)   # ← new guard
     #user.password_hash = bcrypt.hash(data.new_password)
-    user.password_hash = data.new_password
+    user.password_hash =data.new_password
     db.commit()
     return {"message": f"Password reset for {user.email}"}
 
