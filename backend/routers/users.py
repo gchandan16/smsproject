@@ -269,7 +269,71 @@ def list_users(
     return attach_link_status(db, cu.tenant_id, serialized)
 
 
-# ── Get one ───────────────────────────────────────────────────
+# ── Role Permissions ─────────────────────────────────────────
+# ALL of these must live before /{user_id} because FastAPI matches
+# top-to-bottom and "roles-with-permissions" would otherwise be
+# captured as user_id, failing UUID validation with a 422.
+
+class PermissionIn(BaseModel):
+    permissions: list
+
+
+@router.get("/roles-with-permissions")
+def list_roles_with_permissions(
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    role_name = get_role_name(cu, db)
+    if role_name != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+    roles = (
+        db.query(Role)
+        .filter(Role.tenant_id == cu.tenant_id)
+        .order_by(Role.name)
+        .all()
+    )
+    return [
+        {"id": str(r.id), "name": r.name, "is_system": r.is_system, "permissions": r.permissions or []}
+        for r in roles
+    ]
+
+
+@router.get("/roles/{role_id}/permissions")
+def get_role_permissions(
+    role_id: UUID,
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    if get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+    role = db.query(Role).filter(Role.id == role_id, Role.tenant_id == cu.tenant_id).first()
+    if not role:
+        raise HTTPException(404, "Role not found")
+    return {"id": str(role.id), "name": role.name, "is_system": role.is_system, "permissions": role.permissions or []}
+
+
+@router.put("/roles/{role_id}/permissions")
+def update_role_permissions(
+    role_id: UUID,
+    data: PermissionIn,
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    if get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+    role = db.query(Role).filter(Role.id == role_id, Role.tenant_id == cu.tenant_id).first()
+    if not role:
+        raise HTTPException(404, "Role not found")
+    if role.name.lower() == "superadmin":
+        raise HTTPException(400, "Superadmin permissions cannot be restricted")
+    valid = [p.lower().strip() for p in data.permissions if isinstance(p, str) and "." in p]
+    role.permissions = valid
+    db.commit()
+    db.refresh(role)
+    return {"id": str(role.id), "name": role.name, "permissions": role.permissions}
+
+
+# ── Get one user ──────────────────────────────────────────────
 @router.get("/{user_id}")
 def get_user(user_id: UUID, db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
     require_admin(cu, db)
@@ -298,8 +362,7 @@ def create_user(
     user = User(
         tenant_id     = cu.tenant_id,
         email         = data.email,
-       # password_hash = bcrypt.hash(data.password),
-        password_hash = data.password,
+        password_hash = bcrypt.hash(data.password),
         role_id       = role_obj.id,
         first_name    = data.first_name,
         last_name     = data.last_name or "",
@@ -414,6 +477,7 @@ def unlink_student(user_id: UUID,
     return {"message": "Unlinked"}
 
 
+
 @router.post("/{user_id}/unlink-guardian")
 def unlink_guardian(user_id: UUID,
     db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
@@ -425,3 +489,4 @@ def unlink_guardian(user_id: UUID,
     g.user_id = None
     db.commit()
     return {"message": "Unlinked"}
+

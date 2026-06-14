@@ -1,5 +1,8 @@
 // frontend/src/pages/SettingsPage.jsx
 import React, { useState, useEffect, useCallback } from 'react'
+import { useSelector } from 'react-redux'
+import { selectUserRole } from '../store/slices/authSlice'
+import RolePermissionsTab from './RolePermissionsPage'
 
 // ── API helpers — use relative /api (Vite proxy handles it) ──
 const getHeaders = () => ({
@@ -59,7 +62,8 @@ const TABS = [
   { key: 'teachers',     icon: 'bi-person-video2',   label: 'Teachers'        },
   { key: 'rooms',        icon: 'bi-door-open',        label: 'Rooms'           },
   { key: 'div_access',   icon: '',    label: 'USER ACCESS' },
-  { key: 'users',        icon: 'bi-people-fill',     label: 'User Management' },
+  { key: 'users',        icon: 'bi-people-fill',      label: 'User Management' },
+  { key: 'permissions',  icon: 'bi-shield-lock-fill', label: 'Role Permissions' },
 ]
 
 
@@ -84,6 +88,7 @@ class TabErrorBoundary extends React.Component {
 
 export default function SettingsPage() {
   const [tab, setTab] = useState('school')
+  const userRole = useSelector(selectUserRole)
 
   return (
     <div>
@@ -97,7 +102,9 @@ export default function SettingsPage() {
           <div className="card border-0 shadow-sm">
             <div className="card-body p-2">
               <nav className="nav flex-column gap-1">
-                {TABS.map(t => {
+                {TABS
+                  .filter(t => t.key !== 'permissions' || userRole === 'superadmin')
+                  .map(t => {
                   // Render section headers (no icon, no click)
                   if (t.key.startsWith('div_') || t.key.startsWith('divider') || t.key === 'div_infra') {
                     return (
@@ -139,6 +146,7 @@ export default function SettingsPage() {
           {tab === 'teachers'     && <TeachersTab />}
           {tab === 'rooms'        && <RoomsTab />}
           {tab === 'users'        && <TabErrorBoundary><UserManagementTab /></TabErrorBoundary>}
+          {tab === 'permissions'  && <TabErrorBoundary><RolePermissionsTab /></TabErrorBoundary>}
         </div>
       </div>
     </div>
