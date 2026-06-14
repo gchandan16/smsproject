@@ -269,13 +269,34 @@ function CollectFeesTab() {
                             ₹{Math.abs(studentData.total_balance || 0).toFixed(2)}
                           </div>
                         </div>
-                        {/* Generate Invoice button */}
+                        {/* Generate Invoice button — blocked if any unpaid invoice exists */}
                         <div className="d-flex align-items-center">
-                          <button className="btn btn-outline-primary btn-sm"
-                            onClick={() => setShowGenerate(true)}>
-                            <i className="bi bi-plus-circle me-1"></i>
-                            Generate Invoice
-                          </button>
+                          {(() => {
+                            const hasOutstanding = studentData.invoices?.some(
+                              inv => !['paid','cancelled'].includes(inv.status)
+                            )
+                            return hasOutstanding ? (
+                              <div className="d-flex align-items-center gap-2">
+                                <span className="badge bg-warning text-dark small">
+                                  <i className="bi bi-exclamation-triangle-fill me-1"></i>
+                                  Outstanding invoice exists
+                                </span>
+                                <button
+                                  className="btn btn-outline-secondary btn-sm"
+                                  disabled
+                                  title="Collect payment or cancel the existing invoice before generating a new one">
+                                  <i className="bi bi-lock me-1"></i>
+                                  Generate Invoice
+                                </button>
+                              </div>
+                            ) : (
+                              <button className="btn btn-outline-primary btn-sm"
+                                onClick={() => setShowGenerate(true)}>
+                                <i className="bi bi-plus-circle me-1"></i>
+                                Generate Invoice
+                              </button>
+                            )
+                          })()}
                         </div>
                       </div>
                     </div>
@@ -464,7 +485,13 @@ function GenerateInvoiceModal({ student, onSuccess, onClose }) {
       onSuccess()
     } catch (e) {
       const msg = e.response?.data?.detail
-      setError(typeof msg === 'string' ? msg : 'Failed to generate invoice. Check fee structures in Settings.')
+      const status = e.response?.status
+      if (status === 409) {
+        // Duplicate invoice — surface a clear, actionable message
+        setError(`⚠️ ${typeof msg === 'string' ? msg : 'An outstanding invoice already exists for this student. Collect payment or cancel it first.'}`)
+      } else {
+        setError(typeof msg === 'string' ? msg : 'Failed to generate invoice. Check fee structures in Settings.')
+      }
     } finally {
       setSaving(false)
     }

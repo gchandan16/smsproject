@@ -237,6 +237,38 @@ class FeeService:
         """Auto-generate invoice from the fee structure for a grade,
         plus an automatic Transport Fee line if the student is
         assigned to an active transport route."""
+
+        # ── Duplicate prevention ──────────────────────────────────────────────
+        # Block generation if an UNPAID or PARTIAL invoice already exists
+        # for this student in this academic year. This prevents accidental
+        # double-invoicing when someone clicks Generate Invoice more than once.
+        from sqlalchemy import text as _text
+        existing = self.db.execute(_text("""
+            SELECT invoice_no, status
+            FROM fee_invoices
+            WHERE tenant_id        = :tid
+              AND student_id       = :sid
+              AND academic_year_id = :yr
+              AND status NOT IN ('cancelled', 'paid')
+            ORDER BY created_at DESC
+            LIMIT 1
+        """), {
+            "tid": str(tenant_id),
+            "sid": str(student_id),
+            "yr":  str(academic_year_id),
+        }).fetchone()
+
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"An outstanding invoice ({existing.invoice_no}) already exists "
+                    f"for this student with status '{existing.status}'. "
+                    f"Collect payment or cancel that invoice before generating a new one."
+                ),
+            )
+        # ─────────────────────────────────────────────────────────────────────
+
         structures = self.structure_repo.get_for_grade_year(
             tenant_id, grade_id, academic_year_id
         )
