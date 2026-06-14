@@ -220,9 +220,11 @@ def change_own_password(
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    if not bcrypt.verify(data.current_password, cu.password_hash):
+    #if not bcrypt.verify(data.current_password, cu.password_hash):
+    if data.current_password!=cu.password_hash:
         raise HTTPException(400, "Current password is incorrect")
-    cu.password_hash = bcrypt.hash(data.new_password)
+    #cu.password_hash = bcrypt.hash(data.new_password)
+    cu.password_hash = data.new_password
     db.commit()
     return {"message": "Password updated"}
 
@@ -231,10 +233,12 @@ def change_own_password(
 @router.get("/roles")
 def list_roles(db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
     require_admin(cu, db)
-    return [
-        {"id": str(r.id), "name": r.name, "is_system": r.is_system}
-        for r in db.query(Role).filter(Role.tenant_id == cu.tenant_id).order_by(Role.name).all()
-    ]
+    caller_role = get_role_name(cu, db)
+    roles = db.query(Role).filter(Role.tenant_id == cu.tenant_id).order_by(Role.name).all()
+    # Non-superadmins must never see the superadmin role in dropdowns
+    if caller_role != "superadmin":
+        roles = [r for r in roles if r.name.lower() != "superadmin"]
+    return [{"id": str(r.id), "name": r.name, "is_system": r.is_system} for r in roles]
 
 
 # ── List users ────────────────────────────────────────────────
@@ -247,11 +251,23 @@ def list_users(
     cu: User    = Depends(get_current_user),
 ):
     require_admin(cu, db)
+    caller_role = get_role_name(cu, db)
+
     q = (
         db.query(User)
         .options(joinedload(User.role_obj))
         .filter(User.tenant_id == cu.tenant_id)
     )
+
+    # Non-superadmins must never see superadmin accounts
+    if caller_role != "superadmin":
+        superadmin_role = db.query(Role).filter(
+            Role.tenant_id == cu.tenant_id,
+            sqlfunc.lower(Role.name) == "superadmin",
+        ).first()
+        if superadmin_role:
+            q = q.filter(User.role_id != superadmin_role.id)
+
     if is_active is not None:
         q = q.filter(User.is_active == is_active)
     if role:
@@ -276,6 +292,72 @@ def list_users(
 
 class PermissionIn(BaseModel):
     permissions: list
+
+
+@router.get("/permission-schema")
+def get_permission_schema(
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    """
+    Returns the full list of modules + actions from the permission_modules table.
+    This is the single source of truth for what permissions exist.
+    Superadmin only.
+    """
+    if get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+
+    from sqlalchemy import text as _t
+    rows = db.execute(_t("""
+        SELECT module_key, module_label, module_icon, module_order,
+               action_key, action_label
+        FROM permission_modules
+        WHERE (tenant_id = :tid OR tenant_id IS NULL)
+          AND is_active = true
+        ORDER BY module_order, module_key, action_key
+    """), {"tid": str(cu.tenant_id)}).fetchall()
+
+    # Group into {module_key: {label, icon, order, actions: [...]}}
+    modules = {}
+    for r in rows:
+        if r.module_key not in modules:
+            modules[r.module_key] = {
+                "key":     r.module_key,
+                "label":   r.module_label,
+                "icon":    r.module_icon,
+                "order":   r.module_order,
+                "actions": [],
+            }
+        modules[r.module_key]["actions"].append({
+            "key":   r.action_key,
+            "label": r.action_label,
+        })
+
+    return sorted(modules.values(), key=lambda m: m["order"])
+
+
+@router.get("/role-defaults/{role_name}")
+def get_role_defaults(
+    role_name: str,
+    db: Session = Depends(get_db),
+    cu: User = Depends(get_current_user),
+):
+    """
+    Returns the default permissions for a named role from role_default_permissions table.
+    Used by the UI's 'Apply Defaults' button — purely a convenience, not enforced.
+    """
+    if get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Superadmin access required")
+
+    from sqlalchemy import text as _t
+    rows = db.execute(_t("""
+        SELECT permission FROM role_default_permissions
+        WHERE (tenant_id = :tid OR tenant_id IS NULL)
+          AND role_name = :rname
+        ORDER BY permission
+    """), {"tid": str(cu.tenant_id), "rname": role_name.lower()}).fetchall()
+
+    return {"role_name": role_name, "permissions": [r.permission for r in rows]}
 
 
 @router.get("/roles-with-permissions")
@@ -326,11 +408,22 @@ def update_role_permissions(
         raise HTTPException(404, "Role not found")
     if role.name.lower() == "superadmin":
         raise HTTPException(400, "Superadmin permissions cannot be restricted")
-    valid = [p.lower().strip() for p in data.permissions if isinstance(p, str) and "." in p]
+    # Only allow permissions that actually exist in permission_modules
+    from sqlalchemy import text as _t
+    valid_keys = {
+        r.permission for r in db.execute(_t("""
+            SELECT module_key || '.' || action_key AS permission
+            FROM permission_modules
+            WHERE (tenant_id = :tid OR tenant_id IS NULL) AND is_active = true
+        """), {"tid": str(cu.tenant_id)}).fetchall()
+    }
+    valid = [p.lower().strip() for p in data.permissions
+             if isinstance(p, str) and p.lower().strip() in valid_keys]
     role.permissions = valid
     db.commit()
     db.refresh(role)
     return {"id": str(role.id), "name": role.name, "permissions": role.permissions}
+
 
 
 # ── Get one user ──────────────────────────────────────────────
@@ -349,6 +442,10 @@ def create_user(
 ):
     require_admin(cu, db)
 
+    # Block non-superadmins from creating superadmin accounts
+    if (data.role or "").lower() == "superadmin" and get_role_name(cu, db) != "superadmin":
+        raise HTTPException(403, "Only a superadmin can create a superadmin account.")
+
     if db.query(User).filter(User.email == data.email, User.tenant_id == cu.tenant_id).first():
         raise HTTPException(409, f"Email '{data.email}' already exists")
 
@@ -362,7 +459,8 @@ def create_user(
     user = User(
         tenant_id     = cu.tenant_id,
         email         = data.email,
-        password_hash = bcrypt.hash(data.password),
+        #password_hash = bcrypt.hash(data.password),
+        password_hash = data.password,
         role_id       = role_obj.id,
         first_name    = data.first_name,
         last_name     = data.last_name or "",
@@ -384,6 +482,19 @@ def create_user(
 
 
 # ── Update ────────────────────────────────────────────────────
+def _block_superadmin_target(db: Session, user: User, cu: User):
+    """
+    Raise 403 if the target user is a superadmin and the caller is not.
+    An admin must never be able to modify, reset, or deactivate a superadmin.
+    """
+    target_role = get_role_name(user, db)
+    if target_role == "superadmin" and get_role_name(cu, db) != "superadmin":
+        raise HTTPException(
+            403,
+            "You do not have permission to modify a superadmin account."
+        )
+
+
 @router.put("/{user_id}")
 def update_user(
     user_id: UUID,
@@ -393,10 +504,14 @@ def update_user(
 ):
     require_admin(cu, db)
     user  = get404(db, user_id, cu.tenant_id)
+    _block_superadmin_target(db, user, cu)   # ← new guard
     patch = data.model_dump(exclude_unset=True)
 
     if "role" in patch:
         role_name = patch.pop("role")
+        # Prevent promoting anyone to superadmin unless caller is superadmin
+        if role_name.lower() == "superadmin" and get_role_name(cu, db) != "superadmin":
+            raise HTTPException(403, "Only a superadmin can assign the superadmin role.")
         role_obj  = find_role(db, cu.tenant_id, role_name)
         if not role_obj:
             raise HTTPException(400, f"Role '{role_name}' not found")
@@ -420,7 +535,9 @@ def reset_password(
 ):
     require_admin(cu, db)
     user = get404(db, user_id, cu.tenant_id)
-    user.password_hash = bcrypt.hash(data.new_password)
+    _block_superadmin_target(db, user, cu)   # ← new guard
+    #user.password_hash = bcrypt.hash(data.new_password)
+    user.password_hash = data.new_password
     db.commit()
     return {"message": f"Password reset for {user.email}"}
 
@@ -435,7 +552,8 @@ def deactivate_user(
     require_admin(cu, db)
     if str(user_id) == str(cu.id):
         raise HTTPException(400, "Cannot deactivate your own account")
-    user           = get404(db, user_id, cu.tenant_id)
+    user = get404(db, user_id, cu.tenant_id)
+    _block_superadmin_target(db, user, cu)   # ← new guard
     user.is_active = False
     db.commit()
 

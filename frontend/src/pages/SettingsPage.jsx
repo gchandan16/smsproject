@@ -1334,6 +1334,7 @@ function FeeStructureTab() {
 //  USER MANAGEMENT TAB (embedded in Settings)
 // ─────────────────────────────────────────────────────────────
 function UserManagementTab() {
+  const callerRole = useSelector(selectUserRole)   // ← who is logged in
   const [users,      setUsers]      = useState([])
   const [apiRoles,   setApiRoles]   = useState([])
   const [loading,    setLoading]    = useState(true)
@@ -1346,14 +1347,23 @@ function UserManagementTab() {
   const [filterRole, setFilterRole] = useState('')
   const [search,     setSearch]     = useState('')
 
+  // True when the target user row is a superadmin and the caller is not
+  const isProtected = (u) =>
+    u.role === 'superadmin' && callerRole !== 'superadmin'
+
   const FALLBACK_ROLES = [
     { value:'admin',      label:'Admin',       icon:'bi-shield-lock-fill',  bg:'#fee2e2', color:'#dc2626', desc:'Full access — all modules, settings, user management' },
     { value:'teacher',    label:'Teacher',     icon:'bi-person-video2',     bg:'#dbeafe', color:'#1d4ed8', desc:'Mark attendance, enter marks, view students'          },
     { value:'accountant', label:'Accountant',  icon:'bi-cash-coin',         bg:'#dcfce7', color:'#16a34a', desc:'Fee collection, invoices, fee reports'                },
     { value:'student',    label:'Student',     icon:'bi-mortarboard-fill',  bg:'#fef9c3', color:'#d97706', desc:'Own attendance, results and fee invoices only'        },
     { value:'parent',     label:'Parent',      icon:'bi-people-fill',       bg:'#f1f5f9', color:'#64748b', desc:"View child's attendance, results and fee status"      },
+    // superadmin intentionally omitted — only visible in dropdown when callerRole === 'superadmin'
+    // and when the /roles API returns it (which it only does for superadmin callers)
   ]
-  const ROLES = apiRoles.length > 0 ? apiRoles : FALLBACK_ROLES
+  // Final roles list passed to modals — superadmin never appears for non-superadmin callers
+  const ROLES = (apiRoles.length > 0 ? apiRoles : FALLBACK_ROLES).filter(r =>
+    callerRole === 'superadmin' || r.value !== 'superadmin'
+  )
 
   const badge = (role) => {
     const r = ROLES.find(x => x.value === role)
@@ -1391,11 +1401,15 @@ function UserManagementTab() {
           student:    { icon:'bi-mortarboard-fill', bg:'#fef9c3', color:'#d97706', desc:'Own attendance, results and fee invoices only' },
           parent:     { icon:'bi-people-fill',      bg:'#f1f5f9', color:'#64748b', desc:"View child's attendance, results and fee status" },
         }
-        setApiRoles(roleRes.map(r => ({
-          value: r.name,   // exact DB name - sent to backend as-is
+        // Backend already strips superadmin from /roles for non-superadmin callers,
+        // but filter client-side too as defence in depth
+        const filteredRoles = roleRes.filter(r =>
+          callerRole === 'superadmin' || r.name.toLowerCase() !== 'superadmin'
+        )
+        setApiRoles(filteredRoles.map(r => ({
+          value: r.name,
           label: r.name.charAt(0).toUpperCase() + r.name.slice(1).replace(/_/g, ' '),
-          ...(knownMeta[r.name] || knownMeta[r.name.replace('super','').trim()] || 
-              { icon:'bi-person-fill', bg:'#f1f5f9', color:'#64748b', desc:'Portal access' }),
+          ...(knownMeta[r.name] || { icon:'bi-person-fill', bg:'#f1f5f9', color:'#64748b', desc:'Portal access' }),
         })))
       }
     } catch (e) {
@@ -1592,37 +1606,46 @@ function UserManagementTab() {
                     </td>
                     <td>
                       <div className="btn-group btn-group-sm">
-                        {(u.role === 'student' || u.role === 'parent') && (
-                          u.linked ? (
-                            <button className="btn btn-outline-secondary" title="Unlink record"
-                              onClick={() => unlink(u)}>
-                              <i className="bi bi-link-45deg"></i>
+                        {isProtected(u) ? (
+                          <span className="text-muted small d-flex align-items-center gap-1 px-2">
+                            <i className="bi bi-shield-fill-check text-danger"></i>
+                            Protected
+                          </span>
+                        ) : (
+                          <>
+                            {(u.role === 'student' || u.role === 'parent') && (
+                              u.linked ? (
+                                <button className="btn btn-outline-secondary" title="Unlink record"
+                                  onClick={() => unlink(u)}>
+                                  <i className="bi bi-link-45deg"></i>
+                                </button>
+                              ) : (
+                                <button className="btn btn-outline-success" title="Link to student/guardian record"
+                                  onClick={() => setLinkUser(u)}>
+                                  <i className="bi bi-link"></i>
+                                </button>
+                              )
+                            )}
+                            <button className="btn btn-outline-primary" title="Edit role"
+                              onClick={() => setEditUser(u)}>
+                              <i className="bi bi-pencil"></i>
                             </button>
-                          ) : (
-                            <button className="btn btn-outline-success" title="Link to student/guardian record"
-                              onClick={() => setLinkUser(u)}>
-                              <i className="bi bi-link"></i>
+                            <button className="btn btn-outline-warning" title="Reset password"
+                              onClick={() => setResetUser(u)}>
+                              <i className="bi bi-key"></i>
                             </button>
-                          )
+                            {u.is_active
+                              ? <button className="btn btn-outline-danger" title="Deactivate"
+                                  onClick={() => deactivate(u)}>
+                                  <i className="bi bi-person-x"></i>
+                                </button>
+                              : <button className="btn btn-outline-success" title="Reactivate"
+                                  onClick={() => reactivate(u)}>
+                                  <i className="bi bi-person-check"></i>
+                                </button>
+                            }
+                          </>
                         )}
-                        <button className="btn btn-outline-primary" title="Edit role"
-                          onClick={() => setEditUser(u)}>
-                          <i className="bi bi-pencil"></i>
-                        </button>
-                        <button className="btn btn-outline-warning" title="Reset password"
-                          onClick={() => setResetUser(u)}>
-                          <i className="bi bi-key"></i>
-                        </button>
-                        {u.is_active
-                          ? <button className="btn btn-outline-danger" title="Deactivate"
-                              onClick={() => deactivate(u)}>
-                              <i className="bi bi-person-x"></i>
-                            </button>
-                          : <button className="btn btn-outline-success" title="Reactivate"
-                              onClick={() => reactivate(u)}>
-                              <i className="bi bi-person-check"></i>
-                            </button>
-                        }
                       </div>
                     </td>
                   </tr>
