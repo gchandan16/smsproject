@@ -221,7 +221,8 @@ def pdf_response(buf: BytesIO, filename: str):
 # ═══════════════════════════════════════════════════════════════
 #  REPORT 1 — FEE COLLECTION REPORT (school fees, all categories)
 # ═══════════════════════════════════════════════════════════════
-def _fee_collection_data(db, cu, from_date, to_date, grade_id=None, category=None):
+def _fee_collection_data(db, cu, from_date, to_date, grade_id=None, category=None,
+                         page=1, page_size=20, for_export=False):
     params = {"tid": tid(cu), "from": from_date, "to": to_date}
     extra = ""
     if grade_id:
@@ -231,7 +232,7 @@ def _fee_collection_data(db, cu, from_date, to_date, grade_id=None, category=Non
         extra += " AND fc.name = :category"
         params["category"] = category
 
-    rows = db.execute(text(f"""
+    base_sql = f"""
         SELECT
             fp.payment_date,
             fp.receipt_no,
@@ -251,18 +252,20 @@ def _fee_collection_data(db, cu, from_date, to_date, grade_id=None, category=Non
         LEFT JOIN fee_categories fc  ON fc.id = fii.fee_category_id
         WHERE fp.tenant_id = :tid
           AND fp.payment_date BETWEEN :from AND :to {extra}
-        ORDER BY fp.payment_date, s.first_name
-    """), params).fetchall()
+        ORDER BY fp.payment_date DESC, s.first_name
+    """
 
-    # Deduplicate: a payment can join to multiple invoice_items (one per category)
+    rows = db.execute(text(base_sql), params).fetchall()
+
+    # Deduplicate: a payment can join to multiple invoice_items
     seen = set()
-    data = []
+    all_data = []
     for r in rows:
         key = (str(r.payment_date), r.receipt_no, r.first_name, float(r.amount))
         if key in seen:
             continue
         seen.add(key)
-        data.append({
+        all_data.append({
             "date":         str(r.payment_date),
             "receipt_no":   r.receipt_no or "—",
             "student_name": f"{r.first_name} {r.last_name or ''}".strip(),
@@ -272,39 +275,63 @@ def _fee_collection_data(db, cu, from_date, to_date, grade_id=None, category=Non
             "method":       (r.method or "").title(),
             "amount":       float(r.amount),
         })
-    total = sum(d["amount"] for d in data)
-    return data, total
+
+    total_amount = sum(d["amount"] for d in all_data)
+    total_count  = len(all_data)
+
+    if for_export:
+        return all_data, total_amount, total_count
+
+    # Paginate in Python (data is already deduplicated)
+    start = (page - 1) * page_size
+    paged = all_data[start: start + page_size]
+    return paged, total_amount, total_count
 
 
 @router.get("/fees/collection")
 def fee_collection_report(
-    from_date: date = Query(...),
-    to_date:   date = Query(...),
-    grade_id:  Optional[UUID] = Query(None),
-    category:  Optional[str]  = Query(None),
+    from_date:  date          = Query(...),
+    to_date:    date          = Query(...),
+    grade_id:   Optional[UUID]= Query(None),
+    category:   Optional[str] = Query(None),
+    page:       int           = Query(1,  ge=1),
+    page_size:  int           = Query(20, ge=5, le=200),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    data, total = _fee_collection_data(db, cu, from_date, to_date, grade_id, category)
-    by_method = {}
+    data, total, total_count = _fee_collection_data(
+        db, cu, from_date, to_date, grade_id, category, page, page_size
+    )
+    by_method   = {}
     by_category = {}
-    for d in data:
-        by_method[d["method"]] = by_method.get(d["method"], 0) + d["amount"]
+    # For summary totals we need all data — but we already have total_amount
+    # Re-run without pagination just for the summary breakdowns
+    all_data, _, _ = _fee_collection_data(
+        db, cu, from_date, to_date, grade_id, category, for_export=True
+    )
+    for d in all_data:
+        by_method[d["method"]]     = by_method.get(d["method"], 0)     + d["amount"]
         by_category[d["category"]] = by_category.get(d["category"], 0) + d["amount"]
 
     return {
-        "period": {"from": str(from_date), "to": str(to_date)},
-        "total_collected": total,
-        "transaction_count": len(data),
-        "by_method": by_method,
-        "by_category": by_category,
-        "transactions": data,
+        "period":            {"from": str(from_date), "to": str(to_date)},
+        "total_collected":   total,
+        "transaction_count": total_count,
+        "by_method":         by_method,
+        "by_category":       by_category,
+        "transactions":      data,
+        "pagination": {
+            "page":        page,
+            "page_size":   page_size,
+            "total_count": total_count,
+            "total_pages": max(1, -(-total_count // page_size)),
+        },
     }
 
 
 @router.get("/fees/collection/export")
 def export_fee_collection(
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     from_date: date = Query(...),
     to_date:   date = Query(...),
     grade_id:  Optional[UUID] = Query(None),
@@ -312,7 +339,9 @@ def export_fee_collection(
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    data, total = _fee_collection_data(db, cu, from_date, to_date, grade_id, category)
+    data, total, total_count = _fee_collection_data(
+        db, cu, from_date, to_date, grade_id, category, for_export=True
+    )
 
     columns = [
         {"key":"date",         "label":"Date",        "width":12, "pdf_width":55},
@@ -397,29 +426,39 @@ def _transport_fee_data(db, cu, from_date, to_date, route_id=None):
 
 @router.get("/fees/transport")
 def transport_fee_report(
-    from_date: date = Query(...),
-    to_date:   date = Query(...),
-    route_id:  Optional[UUID] = Query(None),
+    from_date:  date           = Query(...),
+    to_date:    date           = Query(...),
+    route_id:   Optional[UUID] = Query(None),
+    page:       int            = Query(1,  ge=1),
+    page_size:  int            = Query(20, ge=5, le=200),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    data, total = _transport_fee_data(db, cu, from_date, to_date, route_id)
+    all_data, total = _transport_fee_data(db, cu, from_date, to_date, route_id)
     by_route = {}
-    for d in data:
+    for d in all_data:
         by_route[d["route"]] = by_route.get(d["route"], 0) + d["amount"]
-
+    total_count = len(all_data)
+    start = (page - 1) * page_size
+    data  = all_data[start: start + page_size]
     return {
-        "period": {"from": str(from_date), "to": str(to_date)},
-        "total_collected": total,
-        "transaction_count": len(data),
-        "by_route": by_route,
-        "transactions": data,
+        "period":            {"from": str(from_date), "to": str(to_date)},
+        "total_collected":   total,
+        "transaction_count": total_count,
+        "by_route":          by_route,
+        "transactions":      data,
+        "pagination": {
+            "page":        page,
+            "page_size":   page_size,
+            "total_count": total_count,
+            "total_pages": max(1, -(-total_count // page_size)),
+        },
     }
 
 
 @router.get("/fees/transport/export")
 def export_transport_fee(
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     from_date: date = Query(...),
     to_date:   date = Query(...),
     route_id:  Optional[UUID] = Query(None),
@@ -502,23 +541,34 @@ def _outstanding_data(db, cu, academic_year_id, grade_id=None, min_amount=0):
 
 @router.get("/fees/outstanding")
 def outstanding_report(
-    academic_year_id: UUID = Query(...),
-    grade_id: Optional[UUID] = Query(None),
-    min_amount: float = Query(0),
+    academic_year_id: UUID         = Query(...),
+    grade_id:         Optional[UUID]= Query(None),
+    min_amount:       float         = Query(0),
+    page:             int           = Query(1,  ge=1),
+    page_size:        int           = Query(20, ge=5, le=200),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    data, total = _outstanding_data(db, cu, academic_year_id, grade_id, min_amount)
+    all_data, total = _outstanding_data(db, cu, academic_year_id, grade_id, min_amount)
+    total_count = len(all_data)
+    start = (page - 1) * page_size
+    data  = all_data[start: start + page_size]
     return {
-        "student_count": len(data),
+        "student_count":     total_count,
         "total_outstanding": total,
-        "students": data,
+        "students":          data,
+        "pagination": {
+            "page":        page,
+            "page_size":   page_size,
+            "total_count": total_count,
+            "total_pages": max(1, -(-total_count // page_size)),
+        },
     }
 
 
 @router.get("/fees/outstanding/export")
 def export_outstanding(
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     academic_year_id: UUID = Query(...),
     grade_id: Optional[UUID] = Query(None),
     min_amount: float = Query(0),
@@ -586,22 +636,33 @@ def _daily_cashbook_data(db, cu, from_date, to_date):
 
 @router.get("/fees/daily-cashbook")
 def daily_cashbook_report(
-    from_date: date = Query(...),
-    to_date:   date = Query(...),
+    from_date:  date = Query(...),
+    to_date:    date = Query(...),
+    page:       int  = Query(1,  ge=1),
+    page_size:  int  = Query(20, ge=5, le=200),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    data, total = _daily_cashbook_data(db, cu, from_date, to_date)
+    all_data, total = _daily_cashbook_data(db, cu, from_date, to_date)
+    total_count = len(all_data)
+    start = (page - 1) * page_size
+    data  = all_data[start: start + page_size]
     return {
-        "period": {"from": str(from_date), "to": str(to_date)},
+        "period":      {"from": str(from_date), "to": str(to_date)},
         "grand_total": total,
-        "days": data,
+        "days":        data,
+        "pagination": {
+            "page":        page,
+            "page_size":   page_size,
+            "total_count": total_count,
+            "total_pages": max(1, -(-total_count // page_size)),
+        },
     }
 
 
 @router.get("/fees/daily-cashbook/export")
 def export_daily_cashbook(
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     from_date: date = Query(...),
     to_date:   date = Query(...),
     db: Session = Depends(get_db),
@@ -713,18 +774,31 @@ def _ledger_data(db, cu, student_id, academic_year_id=None):
 
 @router.get("/fees/ledger/{student_id}")
 def student_ledger(
-    student_id: UUID,
+    student_id:       UUID,
     academic_year_id: Optional[UUID] = Query(None),
+    page:             int             = Query(1,  ge=1),
+    page_size:        int             = Query(20, ge=5, le=200),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    return _ledger_data(db, cu, student_id, academic_year_id)
+    ledger      = _ledger_data(db, cu, student_id, academic_year_id)
+    all_entries = ledger["entries"]
+    total_count = len(all_entries)
+    start       = (page - 1) * page_size
+    ledger["entries"] = all_entries[start: start + page_size]
+    ledger["pagination"] = {
+        "page":        page,
+        "page_size":   page_size,
+        "total_count": total_count,
+        "total_pages": max(1, -(-total_count // page_size)),
+    }
+    return ledger
 
 
 @router.get("/fees/ledger/{student_id}/export")
 def export_ledger(
     student_id: UUID,
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     academic_year_id: Optional[UUID] = Query(None),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
@@ -832,7 +906,7 @@ def income_summary_report(
 
 @router.get("/fees/income-summary/export")
 def export_income_summary(
-    fmt: str = Query("excel", regex="^(excel|pdf)$"),
+    fmt: str = Query("excel", pattern="^(excel|pdf)$"),
     academic_year_id: UUID = Query(...),
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),

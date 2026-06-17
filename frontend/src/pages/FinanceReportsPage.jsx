@@ -88,11 +88,66 @@ export default function FinanceReportsPage() {
 // ─────────────────────────────────────────────────────────────
 //  1. FEE COLLECTION REPORT
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  SHARED PAGINATION COMPONENT
+// ─────────────────────────────────────────────────────────────
+function Pagination({ pagination, onPageChange }) {
+  if (!pagination || pagination.total_pages <= 1) return null
+  const { page, total_pages, total_count, page_size } = pagination
+  const start = (page - 1) * page_size + 1
+  const end   = Math.min(page * page_size, total_count)
+
+  // Build page number list with ellipsis
+  const pages = []
+  for (let i = 1; i <= total_pages; i++) {
+    if (i === 1 || i === total_pages || Math.abs(i - page) <= 2) pages.push(i)
+    else if (pages[pages.length - 1] !== '…') pages.push('…')
+  }
+
+  return (
+    <div className="d-flex align-items-center justify-content-between flex-wrap gap-2 px-3 py-2 border-top bg-white">
+      <div className="text-muted small">
+        Showing <strong>{start}–{end}</strong> of <strong>{total_count}</strong> records
+      </div>
+      <nav>
+        <ul className="pagination pagination-sm mb-0 gap-1">
+          <li className={`page-item ${page <= 1 ? 'disabled' : ''}`}>
+            <button className="page-link rounded" onClick={() => onPageChange(page - 1)}>
+              <i className="bi bi-chevron-left"></i>
+            </button>
+          </li>
+          {pages.map((p, i) =>
+            p === '…' ? (
+              <li key={`e${i}`} className="page-item disabled">
+                <span className="page-link">…</span>
+              </li>
+            ) : (
+              <li key={p} className={`page-item ${p === page ? 'active' : ''}`}>
+                <button className="page-link rounded" onClick={() => onPageChange(p)}>{p}</button>
+              </li>
+            )
+          )}
+          <li className={`page-item ${page >= total_pages ? 'disabled' : ''}`}>
+            <button className="page-link rounded" onClick={() => onPageChange(page + 1)}>
+              <i className="bi bi-chevron-right"></i>
+            </button>
+          </li>
+        </ul>
+      </nav>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  1. FEE COLLECTION REPORT
+// ─────────────────────────────────────────────────────────────
 function CollectionTab() {
   const [fromDate,setFromDate]=useState(monthStart())
   const [toDate,setToDate]=useState(today())
   const [grades,setGrades]=useState([])
   const [gradeId,setGradeId]=useState('')
+  const [page,setPage]=useState(1)
+  const [pageSize]=useState(10)
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
   const [exporting,setExporting]=useState(false)
@@ -100,18 +155,18 @@ function CollectionTab() {
 
   useEffect(()=>{ api.get('/master/grades').then(r=>setGrades(Array.isArray(r.data)?r.data:[])).catch(()=>{}) },[])
 
-  const load=useCallback(async()=>{
+  const load=useCallback(async(p=1)=>{
     setLoading(true); setErr('')
     try{
-      const params={from_date:fromDate,to_date:toDate}
+      const params={from_date:fromDate,to_date:toDate,page:p,page_size:pageSize}
       if(gradeId)params.grade_id=gradeId
       const r=await api.get('/finance-reports/fees/collection',{params})
-      setData(r.data)
+      setData(r.data); setPage(p)
     }catch(e){setErr(e.response?.data?.detail||'Failed to load')}
     setLoading(false)
-  },[fromDate,toDate,gradeId])
+  },[fromDate,toDate,gradeId,pageSize])
 
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{load(1)},[load])
 
   const exportFile=async(fmt)=>{
     setExporting(true)
@@ -130,11 +185,11 @@ function CollectionTab() {
           <div className="row g-2 align-items-end">
             <div className="col-md-2">
               <label className="form-label fw-medium small mb-1">From Date</label>
-              <input type="date" className="form-control form-control-sm" value={fromDate} onChange={e=>setFromDate(e.target.value)} />
+              <input type="date" className="form-control form-control-sm" value={fromDate} onChange={e=>{setFromDate(e.target.value)}} />
             </div>
             <div className="col-md-2">
               <label className="form-label fw-medium small mb-1">To Date</label>
-              <input type="date" className="form-control form-control-sm" value={toDate} onChange={e=>setToDate(e.target.value)} />
+              <input type="date" className="form-control form-control-sm" value={toDate} onChange={e=>{setToDate(e.target.value)}} />
             </div>
             <div className="col-md-2">
               <label className="form-label fw-medium small mb-1">Class</label>
@@ -190,7 +245,7 @@ function CollectionTab() {
           </div>
 
           <div className="card border-0 shadow-sm">
-            <div className="table-responsive" style={{maxHeight:450,overflowY:'auto'}}>
+            <div className="table-responsive">
               <table className="table table-sm table-hover align-middle mb-0">
                 <thead className="table-light sticky-top">
                   <tr><th>Date</th><th>Receipt</th><th>Student</th><th>Admission No</th><th>Class</th><th>Category</th><th>Method</th><th className="text-end">Amount</th></tr>
@@ -213,6 +268,7 @@ function CollectionTab() {
                 </tbody>
               </table>
             </div>
+            <Pagination pagination={data.pagination} onPageChange={p=>load(p)} />
           </div>
         </>
       )}
@@ -228,6 +284,8 @@ function TransportTab() {
   const [toDate,setToDate]=useState(today())
   const [routes,setRoutes]=useState([])
   const [routeId,setRouteId]=useState('')
+  const [page,setPage]=useState(1)
+  const [pageSize]=useState(10)
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
   const [exporting,setExporting]=useState(false)
@@ -235,18 +293,18 @@ function TransportTab() {
 
   useEffect(()=>{ api.get('/transport/routes').then(r=>setRoutes(Array.isArray(r.data)?r.data:[])).catch(()=>{}) },[])
 
-  const load=useCallback(async()=>{
+  const load=useCallback(async(p=1)=>{
     setLoading(true); setErr('')
     try{
-      const params={from_date:fromDate,to_date:toDate}
+      const params={from_date:fromDate,to_date:toDate,page:p,page_size:pageSize}
       if(routeId)params.route_id=routeId
       const r=await api.get('/finance-reports/fees/transport',{params})
-      setData(r.data)
+      setData(r.data); setPage(p)
     }catch(e){setErr(e.response?.data?.detail||'Failed to load')}
     setLoading(false)
-  },[fromDate,toDate,routeId])
+  },[fromDate,toDate,routeId,pageSize])
 
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{load(1)},[load])
 
   const exportFile=async(fmt)=>{
     setExporting(true)
@@ -303,7 +361,7 @@ function TransportTab() {
                 <div className="card-body py-3">
                   <div className="text-muted small mb-2">By Route</div>
                   <div className="row">
-                    {Object.entries(data.by_route).map(([r,v])=>(
+                    {Object.entries(data.by_route||{}).map(([r,v])=>(
                       <div key={r} className="col-md-4 d-flex justify-content-between small mb-1">
                         <span>{r}</span><span className="fw-medium">{fmt(v)}</span>
                       </div>
@@ -315,15 +373,15 @@ function TransportTab() {
           </div>
 
           <div className="card border-0 shadow-sm">
-            <div className="table-responsive" style={{maxHeight:450,overflowY:'auto'}}>
+            <div className="table-responsive">
               <table className="table table-sm table-hover align-middle mb-0">
                 <thead className="table-light sticky-top">
                   <tr><th>Date</th><th>Receipt</th><th>Student</th><th>Class</th><th>Route</th><th>Stop</th><th>Method</th><th className="text-end">Amount</th></tr>
                 </thead>
                 <tbody>
-                  {data.transactions.length===0?(
+                  {(data.transactions||[]).length===0?(
                     <tr><td colSpan={8} className="text-center text-muted py-4">No transport fee transactions in this period</td></tr>
-                  ):data.transactions.map((t,i)=>(
+                  ):(data.transactions||[]).map((t,i)=>(
                     <tr key={i}>
                       <td className="small">{t.date}</td>
                       <td><code className="small">{t.receipt_no}</code></td>
@@ -338,6 +396,7 @@ function TransportTab() {
                 </tbody>
               </table>
             </div>
+            <Pagination pagination={data.pagination} onPageChange={p=>load(p)} />
           </div>
         </>
       )}
@@ -352,6 +411,8 @@ function OutstandingTab({ years, yearId, setYearId }) {
   const [grades,setGrades]=useState([])
   const [gradeId,setGradeId]=useState('')
   const [minAmount,setMinAmount]=useState(0)
+  const [page,setPage]=useState(1)
+  const [pageSize]=useState(10)
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
   const [exporting,setExporting]=useState(false)
@@ -359,19 +420,19 @@ function OutstandingTab({ years, yearId, setYearId }) {
 
   useEffect(()=>{ api.get('/master/grades').then(r=>setGrades(Array.isArray(r.data)?r.data:[])).catch(()=>{}) },[])
 
-  const load=useCallback(async()=>{
+  const load=useCallback(async(p=1)=>{
     if(!yearId)return
     setLoading(true); setErr('')
     try{
-      const params={academic_year_id:yearId,min_amount:minAmount}
+      const params={academic_year_id:yearId,min_amount:minAmount,page:p,page_size:pageSize}
       if(gradeId)params.grade_id=gradeId
       const r=await api.get('/finance-reports/fees/outstanding',{params})
-      setData(r.data)
+      setData(r.data); setPage(p)
     }catch(e){setErr(e.response?.data?.detail||'Failed to load')}
     setLoading(false)
-  },[yearId,gradeId,minAmount])
+  },[yearId,gradeId,minAmount,pageSize])
 
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{load(1)},[load])
 
   const exportFile=async(fmt)=>{
     setExporting(true)
@@ -430,7 +491,7 @@ function OutstandingTab({ years, yearId, setYearId }) {
           </div>
 
           <div className="card border-0 shadow-sm">
-            <div className="table-responsive" style={{maxHeight:450,overflowY:'auto'}}>
+            <div className="table-responsive">
               <table className="table table-sm table-hover align-middle mb-0">
                 <thead className="table-light sticky-top">
                   <tr><th>Student</th><th>Admission No</th><th>Class</th><th>Invoices</th>
@@ -456,6 +517,7 @@ function OutstandingTab({ years, yearId, setYearId }) {
                 </tbody>
               </table>
             </div>
+            <Pagination pagination={data.pagination} onPageChange={p=>load(p)} />
           </div>
         </>
       )}
@@ -469,21 +531,23 @@ function OutstandingTab({ years, yearId, setYearId }) {
 function CashbookTab() {
   const [fromDate,setFromDate]=useState(monthStart())
   const [toDate,setToDate]=useState(today())
+  const [page,setPage]=useState(1)
+  const [pageSize]=useState(10)
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
   const [exporting,setExporting]=useState(false)
   const [err,setErr]=useState('')
 
-  const load=useCallback(async()=>{
+  const load=useCallback(async(p=1)=>{
     setLoading(true); setErr('')
     try{
-      const r=await api.get('/finance-reports/fees/daily-cashbook',{params:{from_date:fromDate,to_date:toDate}})
-      setData(r.data)
+      const r=await api.get('/finance-reports/fees/daily-cashbook',{params:{from_date:fromDate,to_date:toDate,page:p,page_size:pageSize}})
+      setData(r.data); setPage(p)
     }catch(e){setErr(e.response?.data?.detail||'Failed to load')}
     setLoading(false)
-  },[fromDate,toDate])
+  },[fromDate,toDate,pageSize])
 
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{load(1)},[load])
 
   const exportFile=async(fmt)=>{
     setExporting(true)
@@ -549,6 +613,7 @@ function CashbookTab() {
                 </tbody>
               </table>
             </div>
+            <Pagination pagination={data.pagination} onPageChange={p=>load(p)} />
           </div>
         </>
       )}
@@ -563,6 +628,8 @@ function LedgerTab({ years, yearId, setYearId }) {
   const [search,setSearch]=useState('')
   const [results,setResults]=useState([])
   const [student,setStudent]=useState(null)
+  const [page,setPage]=useState(1)
+  const [pageSize]=useState(10)
   const [data,setData]=useState(null)
   const [loading,setLoading]=useState(false)
   const [exporting,setExporting]=useState(false)
@@ -577,12 +644,16 @@ function LedgerTab({ years, yearId, setYearId }) {
 
   const selectStudent=async(s)=>{
     setStudent(s); setResults([]); setSearch(`${s.first_name} ${s.last_name||''}`)
+    loadLedger(s.id, 1)
+  }
+
+  const loadLedger=async(sid, p=1)=>{
     setLoading(true); setErr('')
     try{
-      const params={}
+      const params={page:p,page_size:pageSize}
       if(yearId)params.academic_year_id=yearId
-      const r=await api.get(`/finance-reports/fees/ledger/${s.id}`,{params})
-      setData(r.data)
+      const r=await api.get(`/finance-reports/fees/ledger/${sid}`,{params})
+      setData(r.data); setPage(p)
     }catch(e){setErr(e.response?.data?.detail||'Failed to load')}
     setLoading(false)
   }
@@ -667,7 +738,7 @@ function LedgerTab({ years, yearId, setYearId }) {
           </div>
 
           <div className="card border-0 shadow-sm">
-            <div className="table-responsive" style={{maxHeight:400,overflowY:'auto'}}>
+            <div className="table-responsive">
               <table className="table table-sm table-hover align-middle mb-0">
                 <thead className="table-light sticky-top">
                   <tr><th>Date</th><th>Type</th><th>Reference</th><th>Description</th><th className="text-end">Debit</th><th className="text-end">Credit</th></tr>
@@ -686,6 +757,7 @@ function LedgerTab({ years, yearId, setYearId }) {
                 </tbody>
               </table>
             </div>
+            <Pagination pagination={data.pagination} onPageChange={p=>loadLedger(student.id,p)} />
           </div>
         </>
       )}
