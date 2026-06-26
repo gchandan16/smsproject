@@ -1447,9 +1447,9 @@ function UserManagementTab() {
       `They will lose access to their dashboard until re-linked.`
     )) return
     try {
-      const endpoint = u.role === 'student'
-        ? `/users/${u.id}/unlink-student`
-        : `/users/${u.id}/unlink-guardian`
+      const endpoint = u.role === 'student' ? `/users/${u.id}/unlink-student`
+                      : u.role === 'teacher' ? `/users/${u.id}/unlink-teacher`
+                      : `/users/${u.id}/unlink-guardian`
       const res = await apiPost(endpoint)
       if (res.ok) { load(); setSuccess('Account unlinked.'); setTimeout(() => setSuccess(''), 3000) }
       else setError('Failed to unlink')
@@ -1583,7 +1583,7 @@ function UserManagementTab() {
                         : <span className="badge bg-secondary small">Inactive</span>}
                     </td>
                     <td>
-                      {u.role === 'student' || u.role === 'parent' ? (
+                      {(u.role === 'student' || u.role === 'parent' || u.role === 'teacher') ? (
                         u.linked ? (
                           <div className="small">
                             <i className="bi bi-link-45deg text-success me-1"></i>
@@ -1613,14 +1613,20 @@ function UserManagementTab() {
                           </span>
                         ) : (
                           <>
-                            {(u.role === 'student' || u.role === 'parent') && (
+                            {(u.role === 'student' || u.role === 'parent' || u.role === 'teacher') && (
                               u.linked ? (
-                                <button className="btn btn-outline-secondary" title="Unlink record"
-                                  onClick={() => unlink(u)}>
-                                  <i className="bi bi-link-45deg"></i>
-                                </button>
+                                <>
+                                  <button className="btn btn-outline-primary" title="Re-link to different record"
+                                    onClick={() => setLinkUser(u)}>
+                                    <i className="bi bi-arrow-left-right"></i>
+                                  </button>
+                                  <button className="btn btn-outline-secondary" title="Unlink record"
+                                    onClick={() => unlink(u)}>
+                                    <i className="bi bi-link-45deg"></i>
+                                  </button>
+                                </>
                               ) : (
-                                <button className="btn btn-outline-success" title="Link to student/guardian record"
+                                <button className="btn btn-outline-success" title="Link to student/guardian/teacher record"
                                   onClick={() => setLinkUser(u)}>
                                   <i className="bi bi-link"></i>
                                 </button>
@@ -2024,21 +2030,23 @@ function UMResetModal({ user, onSuccess, onClose }) {
 //  their students / guardians record (so their dashboard works)
 // ─────────────────────────────────────────────────────────────
 function UMLinkModal({ user, onSuccess, onClose }) {
-  const [search, setSearch]     = useState('')
-  const [results, setResults]   = useState([])
+  const [search,   setSearch]   = useState('')
+  const [results,  setResults]  = useState([])
   const [selected, setSelected] = useState(null)
-  const [saving, setSaving]     = useState(false)
-  const [error, setError]       = useState('')
+  const [saving,   setSaving]   = useState(false)
+  const [error,    setError]    = useState('')
 
-  const isStudent = user.role === 'student'
+  const mode = user.role === 'student' ? 'student'
+             : user.role === 'teacher' ? 'teacher'
+             : 'guardian'
 
   const searchLink = async (q) => {
     setSearch(q); setSelected(null)
     if (q.length < 2) { setResults([]); return }
     try {
-      const endpoint = isStudent
-        ? '/students/lookup/unlinked-students'
-        : '/students/lookup/unlinked-guardians'
+      const endpoint = mode === 'student' ? '/students/lookup/unlinked-students'
+                      : mode === 'teacher' ? '/students/lookup/all-teachers'
+                      : '/students/lookup/all-guardians'
       const data = await apiFetch(`${endpoint}?search=${encodeURIComponent(q)}`)
       setResults(Array.isArray(data) ? data : [])
     } catch { setResults([]) }
@@ -2048,9 +2056,9 @@ function UMLinkModal({ user, onSuccess, onClose }) {
     if (!selected) { setError('Please select a record to link'); return }
     setSaving(true); setError('')
     try {
-      const endpoint = isStudent
-        ? `/users/${user.id}/link-student/${selected.id}`
-        : `/users/${user.id}/link-guardian/${selected.id}`
+      const endpoint = mode === 'student' ? `/users/${user.id}/link-student/${selected.id}`
+                      : mode === 'teacher' ? `/users/${user.id}/link-teacher/${selected.id}`
+                      : `/users/${user.id}/link-guardian/${selected.id}`
       const res = await apiPost(endpoint)
       if (res.ok) onSuccess()
       else {
@@ -2063,64 +2071,113 @@ function UMLinkModal({ user, onSuccess, onClose }) {
 
   const initials = ((user.first_name?.[0] || '') + (user.last_name?.[0] || '')).toUpperCase() || '?'
 
+  const searchLabel = mode === 'student' ? 'Search Student Record'
+                     : mode === 'teacher' ? 'Search Teacher Record (all)'
+                     : 'Search Guardian Record (all)'
+  const searchPlaceholder = mode === 'student' ? 'Search by student name or admission no...'
+                           : mode === 'teacher' ? 'Search by teacher name, employee no, or phone...'
+                           : 'Search by parent name, phone, or child name / admission no...'
+
   return (
     <div className="modal show d-block" style={{ background: 'rgba(0,0,0,0.5)', zIndex: 1055 }}>
-      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 500 }}>
+      <div className="modal-dialog modal-dialog-centered" style={{ maxWidth: 520 }}>
         <div className="modal-content border-0 shadow">
           <div className="modal-header border-0 pb-0">
             <h5 className="modal-title fw-bold">
-              <i className="bi bi-link-45deg me-2 text-success"></i>Link Account
+              <i className="bi bi-link-45deg me-2 text-success"></i>
+              {user.linked ? 'Re-link Account' : 'Link Account'}
             </h5>
             <button className="btn-close" onClick={onClose}></button>
           </div>
           <div className="modal-body">
+
+            {/* Current user card */}
             <div className="alert alert-light border small mb-3 d-flex align-items-center gap-2">
               <div className="rounded-circle d-flex align-items-center justify-content-center fw-bold flex-shrink-0"
-                style={{ width: 30, height: 30, background: '#f1f5f9', color: '#64748b', fontSize: 11 }}>
+                style={{ width: 32, height: 32, background: '#f1f5f9', color: '#64748b', fontSize: 11 }}>
                 {initials}
               </div>
-              <div>
+              <div className="flex-fill">
                 <strong>{user.first_name} {user.last_name || ''}</strong>
                 <div className="text-muted" style={{ fontSize: 11 }}>{user.email}</div>
               </div>
-              <span className={`badge ms-auto small ${isStudent ? 'bg-warning text-dark' : 'bg-secondary'}`}>
-                {isStudent ? 'Student' : 'Parent'}
-              </span>
+              <span className="badge bg-secondary small text-capitalize">{user.role}</span>
             </div>
 
-            {error && <div className="alert alert-danger py-2 small mb-3"><i className="bi bi-exclamation-triangle-fill me-2"></i>{error}</div>}
+            {/* Show current wrong link if relinking */}
+            {user.linked && user.link_info && (
+              <div className="alert alert-warning py-2 small mb-3 d-flex align-items-center gap-2">
+                <i className="bi bi-exclamation-triangle-fill text-warning"></i>
+                <span>
+                  Currently linked to: <strong>{user.link_info.linked_name}</strong>
+                  {user.link_info.linked_detail && <> &mdash; <span className="text-muted">{user.link_info.linked_detail}</span></>}
+                </span>
+              </div>
+            )}
+
+            {error && (
+              <div className="alert alert-danger py-2 small mb-3">
+                <i className="bi bi-exclamation-triangle-fill me-2"></i>{error}
+              </div>
+            )}
 
             <label className="form-label fw-medium small">
-              {isStudent ? 'Search Student Record' : 'Search Guardian Record'}
+              {searchLabel}
               <span className="text-danger"> *</span>
             </label>
             <div className="position-relative">
               <input className="form-control" autoComplete="off" autoFocus
-                placeholder={isStudent
-                  ? 'Search by student name or admission no...'
-                  : 'Search by guardian name, phone, or student name...'}
+                placeholder={searchPlaceholder}
                 value={search}
                 onChange={e => searchLink(e.target.value)} />
+
               {results.length > 0 && (
                 <div className="border rounded mt-1 bg-white shadow-sm position-absolute w-100"
-                  style={{ zIndex: 20, maxHeight: 200, overflowY: 'auto' }}>
+                  style={{ zIndex: 20, maxHeight: 240, overflowY: 'auto' }}>
                   {results.map(item => (
                     <button key={item.id} type="button"
-                      className="w-100 text-start border-0 px-3 py-2 small bg-white d-flex justify-content-between"
-                      onClick={() => { setSelected(item); setSearch(item.name); setResults([]) }}>
-                      {isStudent ? (
-                        <>
-                          <span>{item.name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
-                          <span className="text-muted">{item.class}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>
-                            {item.name}
-                            <span className="badge bg-light text-dark border ms-2 text-capitalize" style={{ fontSize: 10 }}>{item.relation}</span>
-                          </span>
-                          <span className="text-muted">of {item.student_name} <code style={{ fontSize: 10 }}>{item.admission_no}</code></span>
-                        </>
+                      className={`w-100 text-start border-0 px-3 py-2 small d-flex justify-content-between align-items-center
+                        ${item.already_linked ? 'bg-warning-subtle' : 'bg-white'}`}
+                      onClick={() => { setSelected(item); setSearch(
+                        mode === 'student' ? item.name
+                        : mode === 'teacher' ? `${item.name} (${item.designation})`
+                        : `${item.name} (${item.relation} of ${item.student_name})`
+                      ); setResults([]) }}>
+                      <div>
+                        {mode === 'student' && (
+                          <>
+                            <span className="fw-medium">{item.name}</span>
+                            <code className="ms-2" style={{ fontSize: 10 }}>{item.admission_no}</code>
+                            <span className="text-muted ms-2">{item.class}</span>
+                          </>
+                        )}
+                        {mode === 'teacher' && (
+                          <>
+                            <span className="fw-medium">{item.name}</span>
+                            <span className="badge bg-light text-dark border ms-1" style={{ fontSize: 10 }}>
+                              {item.designation}
+                            </span>
+                            <span className="text-muted ms-2 small">
+                              {item.employee_no} &middot; {item.department}
+                            </span>
+                          </>
+                        )}
+                        {mode === 'guardian' && (
+                          <>
+                            <span className="fw-medium">{item.name}</span>
+                            <span className="badge bg-light text-dark border ms-1 text-capitalize" style={{ fontSize: 10 }}>
+                              {item.relation}
+                            </span>
+                            <span className="text-muted ms-2 small">
+                              of {item.student_name} <code style={{ fontSize: 10 }}>{item.admission_no}</code>
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      {item.already_linked && (
+                        <span className="badge bg-warning text-dark flex-shrink-0 ms-2" style={{ fontSize: 10 }}>
+                          Linked to {item.linked_to}
+                        </span>
                       )}
                     </button>
                   ))}
@@ -2131,24 +2188,50 @@ function UMLinkModal({ user, onSuccess, onClose }) {
             {selected ? (
               <div className="mt-2 p-2 bg-success bg-opacity-10 rounded small">
                 <i className="bi bi-check-circle-fill text-success me-1"></i>
-                {isStudent ? (
-                  <>Will link to <strong>{selected.name}</strong> <code style={{ fontSize: 10 }}>{selected.admission_no}</code> — {selected.class}</>
-                ) : (
-                  <>Will link as <strong className="text-capitalize">{selected.relation}</strong> of <strong>{selected.student_name}</strong> <code style={{ fontSize: 10 }}>{selected.admission_no}</code></>
+                {mode === 'student' && (
+                  <>Will link to <strong>{selected.name}</strong> <code style={{ fontSize: 10 }}>{selected.admission_no}</code></>
+                )}
+                {mode === 'teacher' && (
+                  <>
+                    Will link to <strong>{selected.name}</strong>{' '}
+                    <span className="text-muted">({selected.designation}, {selected.employee_no})</span>
+                    {selected.already_linked && (
+                      <span className="text-warning fw-semibold d-block mt-1">
+                        <i className="bi bi-exclamation-triangle-fill me-1"></i>
+                        This will also unlink from the previous account ({selected.linked_to})
+                      </span>
+                    )}
+                  </>
+                )}
+                {mode === 'guardian' && (
+                  <>
+                    Will link as <strong className="text-capitalize">{selected.relation}</strong> of{' '}
+                    <strong>{selected.student_name}</strong>{' '}
+                    <code style={{ fontSize: 10 }}>{selected.admission_no}</code>
+                    {selected.already_linked && (
+                      <span className="text-warning fw-semibold d-block mt-1">
+                        <i className="bi bi-exclamation-triangle-fill me-1"></i>
+                        This will also unlink from the previous account ({selected.linked_to})
+                      </span>
+                    )}
+                  </>
                 )}
               </div>
             ) : (
               <div className="form-text">
-                {isStudent
-                  ? 'Only students without an existing login are shown.'
-                  : 'Only guardians without an existing login are shown.'}
+                {mode === 'student' && 'Only students without an existing login are shown.'}
+                {mode === 'teacher' && 'All teachers shown — yellow rows are currently linked to another account.'}
+                {mode === 'guardian' && 'All guardians shown — yellow rows are currently linked to another account.'}
               </div>
             )}
           </div>
+
           <div className="modal-footer border-0 pt-0">
             <button className="btn btn-light" onClick={onClose}>Cancel</button>
             <button className="btn btn-success" onClick={handleLink} disabled={saving || !selected}>
-              {saving ? <><span className="spinner-border spinner-border-sm me-2"></span>Linking...</> : <><i className="bi bi-link me-2"></i>Link Account</>}
+              {saving
+                ? <><span className="spinner-border spinner-border-sm me-2"></span>Linking...</>
+                : <><i className="bi bi-link me-2"></i>{user.linked ? 'Re-link Account' : 'Link Account'}</>}
             </button>
           </div>
         </div>
@@ -2161,8 +2244,10 @@ function UMLinkModal({ user, onSuccess, onClose }) {
 //  TEACHERS TAB
 // ─────────────────────────────────────────────────────────────
 function TeachersTab() {
-  const [teachers, setTeachers] = useState([])
-  const [subjects, setSubjects] = useState([])
+  const [teachers,    setTeachers]    = useState([])
+  const [subjects,    setSubjects]    = useState([])
+  const [departments, setDepartments] = useState([])
+  const [designations,setDesignations]= useState([])
   const [loading,  setLoading]  = useState(true)
   const [error,    setError]    = useState('')
   const [success,  setSuccess]  = useState('')
@@ -2178,9 +2263,13 @@ function TeachersTab() {
     Promise.all([
       apiFetch('/teachers').catch(() => []),
       apiFetch('/master/subjects').catch(() => []),
-    ]).then(([t, s]) => {
+      apiFetch('/master/departments').catch(() => []),
+      apiFetch('/master/designations').catch(() => []),
+    ]).then(([t, s, d, g]) => {
       setTeachers(Array.isArray(t) ? t : [])
       setSubjects(Array.isArray(s) ? s : [])
+      setDepartments(Array.isArray(d) ? d : [])
+      setDesignations(Array.isArray(g) ? g : [])
       setLoading(false)
     })
   }, [])
@@ -2210,6 +2299,16 @@ function TeachersTab() {
       is_active:   t.is_active,
       subject_ids: (t.subjects || []).map(s => s.subject_id),
     })
+    // If this teacher's existing department/designation was typed as free
+    // text before the dropdown existed (e.g. "HINDI") and doesn't match any
+    // master-data option, inject it as a temporary option so it still shows
+    // correctly and isn't silently lost when the form is saved unchanged.
+    if (t.department && !departments.some(d => d.name === t.department)) {
+      setDepartments(prev => [...prev, { id: `_legacy_${t.department}`, name: t.department }])
+    }
+    if (t.designation && !designations.some(d => d.name === t.designation)) {
+      setDesignations(prev => [...prev, { id: `_legacy_${t.designation}`, name: t.designation }])
+    }
     setError('')
     setShowForm(true)
   }
@@ -2297,13 +2396,35 @@ function TeachersTab() {
               </div>
               <div className="col-md-3">
                 <label className="form-label fw-medium small">Department</label>
-                <input className="form-control" value={form.department}
-                  onChange={e => setForm(f => ({...f, department: e.target.value}))} />
+                <select className="form-select" value={form.department}
+                  onChange={e => setForm(f => ({...f, department: e.target.value}))}>
+                  <option value="">Select department...</option>
+                  {departments.map(d => (
+                    <option key={d.id} value={d.name}>{d.name}{d.code ? ` (${d.code})` : ''}</option>
+                  ))}
+                </select>
+                {departments.length === 0 && (
+                  <div className="form-text text-warning">
+                    <i className="bi bi-exclamation-triangle me-1"></i>
+                    No departments set up yet — add some in the Departments tab.
+                  </div>
+                )}
               </div>
               <div className="col-md-3">
                 <label className="form-label fw-medium small">Designation</label>
-                <input className="form-control" value={form.designation}
-                  onChange={e => setForm(f => ({...f, designation: e.target.value}))} />
+                <select className="form-select" value={form.designation}
+                  onChange={e => setForm(f => ({...f, designation: e.target.value}))}>
+                  <option value="">Select designation...</option>
+                  {designations.map(d => (
+                    <option key={d.id} value={d.name}>{d.name}</option>
+                  ))}
+                </select>
+                {designations.length === 0 && (
+                  <div className="form-text text-warning">
+                    <i className="bi bi-exclamation-triangle me-1"></i>
+                    No designations set up yet — add some in the Designations tab.
+                  </div>
+                )}
               </div>
               <div className="col-md-3">
                 <label className="form-label fw-medium small">Status</label>

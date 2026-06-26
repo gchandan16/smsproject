@@ -296,6 +296,30 @@ def list_sections(
     ]
 
 
+@router.get("/sections/{id}")
+def get_section(
+    id: str,
+    db: Session = Depends(get_db),
+    cu: User    = Depends(get_current_user)
+):
+    """Fetch a single section by ID — used to resolve grade_id when only
+    a section_id is known (e.g. Teacher Dashboard → Take Attendance shortcut)."""
+    try:
+        sid = UUID(id)
+    except Exception:
+        raise HTTPException(400, "Invalid section id")
+    s = db.query(Section).filter(Section.id == sid, Section.tenant_id == get_tid(cu)).first()
+    if not s:
+        raise HTTPException(404, "Section not found")
+    return {
+        "id":               str(s.id),
+        "name":             s.name,
+        "capacity":         s.capacity,
+        "grade_id":         str(s.grade_id),
+        "academic_year_id": str(s.academic_year_id),
+    }
+
+
 @router.post("/sections", status_code=201)
 def create_section(
     data: SectionIn,

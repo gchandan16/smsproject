@@ -111,14 +111,15 @@ def serialize(u: User) -> dict:
 
 def attach_link_status(db: Session, tenant_id: UUID, serialized_users: list[dict]) -> list[dict]:
     """
-    For users with role student/parent, check whether they're linked
-    to a students/guardians record (via user_id) and attach a 'linked' flag
-    plus the linked record's display info.
+    For users with role student/parent/teacher, check whether they're linked
+    to a students/guardians/teachers record (via user_id) and attach a 'linked'
+    flag plus the linked record's display info.
     """
     from sqlalchemy import text, bindparam
 
     student_ids = [u["id"] for u in serialized_users if u["role"] == "student"]
     parent_ids  = [u["id"] for u in serialized_users if u["role"] == "parent"]
+    teacher_ids = [u["id"] for u in serialized_users if u["role"] == "teacher"]
 
     student_links = {}
     if student_ids:
@@ -151,11 +152,27 @@ def attach_link_status(db: Session, tenant_id: UUID, serialized_users: list[dict
                 "linked_detail": f"{r.relation} of {r.student_first} {r.student_last or ''} ({r.admission_no})".strip(),
             }
 
+    teacher_links = {}
+    if teacher_ids:
+        sql = text("""
+            SELECT user_id, id, name, employee_no, designation
+            FROM teachers WHERE tenant_id=:tid AND user_id IN :uids
+        """).bindparams(bindparam("uids", expanding=True))
+        rows = db.execute(sql, {"tid": str(tenant_id), "uids": tuple(teacher_ids)}).fetchall()
+        for r in rows:
+            teacher_links[str(r.user_id)] = {
+                "linked_id": str(r.id),
+                "linked_name": r.name,
+                "linked_detail": f"{r.designation or 'Teacher'}{' — ' + r.employee_no if r.employee_no else ''}",
+            }
+
     for u in serialized_users:
         if u["role"] == "student":
             link = student_links.get(u["id"])
         elif u["role"] == "parent":
             link = guardian_links.get(u["id"])
+        elif u["role"] == "teacher":
+            link = teacher_links.get(u["id"])
         else:
             link = None
 
@@ -220,11 +237,9 @@ def change_own_password(
     db: Session = Depends(get_db),
     cu: User    = Depends(get_current_user),
 ):
-    #if not bcrypt.verify(data.current_password, cu.password_hash):
-    if not (data.current_password!=cu.password_hash):
+    if not bcrypt.verify(data.current_password, cu.password_hash):
         raise HTTPException(400, "Current password is incorrect")
-    #cu.password_hash = bcrypt.hash(data.new_password)
-    cu.password_hash = data.new_password
+    cu.password_hash = bcrypt.hash(data.new_password)
     db.commit()
     return {"message": "Password updated"}
 
@@ -637,8 +652,7 @@ def create_user(
     user = User(
         tenant_id     = cu.tenant_id,
         email         = data.email,
-        #password_hash = bcrypt.hash(data.password),
-        password_hash = data.password,
+        password_hash = bcrypt.hash(data.password),
         role_id       = role_obj.id,
         first_name    = data.first_name,
         last_name     = data.last_name or "",
@@ -714,8 +728,7 @@ def reset_password(
     require_admin(cu, db)
     user = get404(db, user_id, cu.tenant_id)
     _block_superadmin_target(db, user, cu)   # ← new guard
-    #user.password_hash = bcrypt.hash(data.new_password)
-    user.password_hash =data.new_password
+    user.password_hash = bcrypt.hash(data.new_password)
     db.commit()
     return {"message": f"Password reset for {user.email}"}
 
@@ -737,6 +750,47 @@ def deactivate_user(
 
 
 # ── Link student / guardian ───────────────────────────────────
+@router.post("/{user_id}/link-teacher/{teacher_id}")
+def link_teacher(user_id: UUID, teacher_id: UUID,
+    db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
+    require_admin(cu, db)
+    from sqlalchemy import text as _t
+    # Clear any previous teacher linked to this user_id (re-linking support)
+    db.execute(_t("""
+        UPDATE teachers SET user_id = NULL
+        WHERE user_id = :uid AND tenant_id = :tid AND id != :teacher_id
+    """), {"uid": str(user_id), "tid": str(cu.tenant_id), "teacher_id": str(teacher_id)})
+
+    result = db.execute(_t("""
+        UPDATE teachers SET user_id = :uid
+        WHERE id = :teacher_id AND tenant_id = :tid
+        RETURNING id
+    """), {"uid": str(user_id), "teacher_id": str(teacher_id), "tid": str(cu.tenant_id)}).fetchone()
+
+    if not result:
+        db.rollback()
+        raise HTTPException(404, "Teacher not found")
+    db.commit()
+    return {"message": "Linked"}
+
+
+@router.post("/{user_id}/unlink-teacher")
+def unlink_teacher(user_id: UUID,
+    db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
+    require_admin(cu, db)
+    from sqlalchemy import text as _t
+    result = db.execute(_t("""
+        UPDATE teachers SET user_id = NULL
+        WHERE user_id = :uid AND tenant_id = :tid
+        RETURNING id
+    """), {"uid": str(user_id), "tid": str(cu.tenant_id)}).fetchone()
+    if not result:
+        db.rollback()
+        raise HTTPException(404, "No linked teacher record found for this user")
+    db.commit()
+    return {"message": "Unlinked"}
+
+
 @router.post("/{user_id}/link-student/{student_id}")
 def link_student(user_id: UUID, student_id: UUID,
     db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
@@ -753,9 +807,18 @@ def link_guardian(user_id: UUID, guardian_id: UUID,
     db: Session = Depends(get_db), cu: User = Depends(get_current_user)):
     require_admin(cu, db)
     from models.student import Guardian
+    # Clear any previous guardian linked to this user_id (re-linking support)
+    old = db.query(Guardian).filter(
+        Guardian.user_id == user_id,
+        Guardian.tenant_id == cu.tenant_id
+    ).first()
+    if old and str(old.id) != str(guardian_id):
+        old.user_id = None
+
     g = db.query(Guardian).filter(Guardian.id == guardian_id, Guardian.tenant_id == cu.tenant_id).first()
     if not g: raise HTTPException(404, "Guardian not found")
-    g.user_id = user_id; db.commit()
+    g.user_id = user_id
+    db.commit()
     return {"message": "Linked"}
 
 

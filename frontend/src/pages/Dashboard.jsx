@@ -5,6 +5,7 @@ import { useSelector } from 'react-redux'
 import reportsApi from '../api/reportsApi.js'
 import { selectUserRole } from '../store/slices/authSlice.js'
 import StudentParentDashboard from './StudentParentDashboard.jsx'
+import TeacherDashboard from './TeacherDashboard.jsx'
 
 // ─────────────────────────────────────────────────────────────
 //  HELPERS
@@ -53,6 +54,11 @@ export default function DashboardPage() {
   // Students and parents get a completely different, personalized dashboard
   if (role === 'student' || role === 'parent') {
     return <StudentParentDashboard />
+  }
+
+  // Teachers get their own dashboard — today's classes, attendance, timetable
+  if (role === 'teacher') {
+    return <TeacherDashboard />
   }
 
   return <AdminDashboard />

@@ -23,18 +23,20 @@ import SettingsPage       from './pages/SettingsPage.jsx'
 import MyTimetablePage    from './pages/MyTimetablePage.jsx'
 import MyAttendancePage   from './pages/MyAttendancePage.jsx'
 import MyFeesPage         from './pages/MyFeesPage.jsx'
+import MyClassTimetablePage from './pages/MyClassTimetablePage.jsx'
 
 // Roles that are always portal-only — NEVER access staff pages
 const PERSONAL_ROLES = ['student', 'parent']
 
 /**
- * PrivateRoute — two modes:
+ * PrivateRoute — three modes:
  *
  * 1. personalOnly: true  → only student/parent can access (My Timetable, My Fees)
- * 2. permission: "x.y"   → check dynamic DB permission; also blocks student/parent
+ * 2. roles: [...]        → only the listed roles can access (e.g. teacher-only pages)
+ * 3. permission: "x.y"   → check dynamic DB permission; also blocks student/parent
  *                           even if they somehow have that permission string
  */
-function PrivateRoute({ children, permission = null, personalOnly = false }) {
+function PrivateRoute({ children, permission = null, personalOnly = false, roles = null }) {
   const isAuthenticated = useSelector(selectIsAuthenticated)
   const userRole        = (useSelector(selectUserRole) || '').toLowerCase()
   const can             = useSelector(selectHasPermission)
@@ -44,6 +46,13 @@ function PrivateRoute({ children, permission = null, personalOnly = false }) {
   // Personal pages — only student/parent
   if (personalOnly) {
     return PERSONAL_ROLES.includes(userRole)
+      ? children
+      : <Navigate to="/" replace />
+  }
+
+  // Explicit role allowlist (e.g. teacher-only pages)
+  if (roles) {
+    return roles.includes(userRole)
       ? children
       : <Navigate to="/" replace />
   }
@@ -81,6 +90,11 @@ export default function App() {
           } />
           <Route path="my-fees" element={
             <PrivateRoute personalOnly><MyFeesPage /></PrivateRoute>
+          } />
+
+          {/* Teacher's personal weekly timetable (read-only, all their classes) */}
+          <Route path="my-class-timetable" element={
+            <PrivateRoute roles={['teacher']}><MyClassTimetablePage /></PrivateRoute>
           } />
 
           {/* Academic — permission-gated, student/parent hard-blocked */}

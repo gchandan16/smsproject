@@ -199,6 +199,50 @@ def lookup_unlinked_students(
     ]
 
 
+@router.get("/lookup/all-teachers")
+def lookup_all_teachers(
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    cu: User    = Depends(get_current_user),
+):
+    """
+    Search ALL teachers (linked or not) — used by the User Management
+    Link/Re-link modal for accounts with role 'teacher'.
+    """
+    from sqlalchemy import text
+    params = {"tid": str(cu.tenant_id)}
+    extra = ""
+    if search:
+        extra = """ AND (
+            t.name ILIKE :q OR t.employee_no ILIKE :q
+            OR t.email ILIKE :q OR t.phone ILIKE :q
+        )"""
+        params["q"] = f"%{search}%"
+
+    rows = db.execute(text(f"""
+        SELECT t.id, t.name, t.employee_no, t.department, t.designation,
+               t.user_id, u.email AS linked_user_email
+        FROM teachers t
+        LEFT JOIN users u ON u.id = t.user_id
+        WHERE t.tenant_id = :tid AND t.is_active = true {extra}
+        ORDER BY t.name
+        LIMIT 50
+    """), params).fetchall()
+
+    return [
+        {
+            "id":             str(r.id),
+            "name":           r.name,
+            "employee_no":    r.employee_no or "—",
+            "department":     r.department or "—",
+            "designation":    r.designation or "Teacher",
+            "already_linked": r.user_id is not None,
+            "linked_to":      r.linked_user_email,
+        }
+        for r in rows
+    ]
+
+
 @router.get("/lookup/unlinked-guardians")
 def lookup_unlinked_guardians(
     search: Optional[str] = Query(None),
@@ -245,7 +289,58 @@ def lookup_unlinked_guardians(
     ]
 
 
-@router.get("/{student_id}", response_model=StudentOut)
+@router.get("/lookup/all-guardians")
+def lookup_all_guardians(
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    cu: User    = Depends(get_current_user),
+):
+    """
+    Search ALL guardians (linked or not) — used when re-linking a parent
+    account that is currently linked to the wrong student.
+    Returns guardian + student info + whether currently linked to a user.
+    """
+    from sqlalchemy import text
+    params = {"tid": str(cu.tenant_id)}
+    extra = ""
+    if search:
+        extra = """ AND (
+            gu.first_name ILIKE :q OR gu.last_name ILIKE :q
+            OR gu.phone ILIKE :q OR gu.email ILIKE :q
+            OR s.first_name ILIKE :q OR s.last_name ILIKE :q
+            OR s.admission_no ILIKE :q
+        )"""
+        params["q"] = f"%{search}%"
+
+    rows = db.execute(text(f"""
+        SELECT gu.id, gu.first_name, gu.last_name, gu.relation, gu.phone, gu.email,
+               gu.user_id,
+               s.first_name AS student_first, s.last_name AS student_last, s.admission_no,
+               u.email AS linked_user_email
+        FROM guardians gu
+        JOIN students s ON s.id = gu.student_id
+        LEFT JOIN users u ON u.id = gu.user_id
+        WHERE gu.tenant_id = :tid {extra}
+        ORDER BY gu.first_name
+        LIMIT 50
+    """), params).fetchall()
+
+    return [
+        {
+            "id":            str(r.id),
+            "name":          f"{r.first_name} {r.last_name or ''}".strip(),
+            "relation":      r.relation,
+            "phone":         r.phone,
+            "email":         r.email,
+            "student_name":  f"{r.student_first} {r.student_last or ''}".strip(),
+            "admission_no":  r.admission_no,
+            "already_linked": r.user_id is not None,
+            "linked_to":      r.linked_user_email,
+        }
+        for r in rows
+    ]
+
+
 def get_student(
     student_id:   UUID,
     service:      StudentService = Depends(get_service),

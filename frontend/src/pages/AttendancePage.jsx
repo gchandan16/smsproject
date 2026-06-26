@@ -4,6 +4,7 @@
 // Tabs: Mark Attendance | Summary | Low Attendance
 // ─────────────────────────────────────────────────────────────
 import { useState, useEffect, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import attendanceApi from '../api/attendanceApi.js'
 import studentsApi   from '../api/studentsApi.js'
 
@@ -57,6 +58,9 @@ export default function AttendancePage() {
 //  MARK ATTENDANCE TAB
 // ─────────────────────────────────────────────────────────────
 function MarkAttendanceTab() {
+  const [searchParams] = useSearchParams()
+  const preselectSectionId = searchParams.get('section_id')
+
   const [grades,          setGrades]          = useState([])
   const [years,           setYears]           = useState([])
   const [sections,        setSections]        = useState([])
@@ -74,6 +78,7 @@ function MarkAttendanceTab() {
   const [saving,          setSaving]          = useState(false)
   const [saved,           setSaved]           = useState(false)
   const [error,           setError]           = useState('')
+  const [resolvingSection, setResolvingSection] = useState(!!preselectSectionId)
 
   // Load grades + years
   useEffect(() => {
@@ -91,14 +96,39 @@ function MarkAttendanceTab() {
     })
   }, [])
 
+  // If arriving from Teacher Dashboard with a section_id in the URL,
+  // resolve which grade that section belongs to, then auto-select everything.
+  useEffect(() => {
+    if (!preselectSectionId || !selectedYear) return
+    fetch(`/api/master/sections/${preselectSectionId}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(sec => {
+        if (sec?.grade_id) {
+          setSelectedGrade(sec.grade_id)
+          // selectedSection gets set once sections load for this grade (see below)
+        }
+      })
+      .finally(() => setResolvingSection(false))
+  }, [preselectSectionId, selectedYear])
+
   // Load sections when grade + year selected
   useEffect(() => {
     if (!selectedGrade || !selectedYear) { setSections([]); return }
     setLoadingSections(true)
     studentsApi.getSections(selectedGrade, selectedYear)
-      .then(d => { setSections(Array.isArray(d) ? d : []) })
+      .then(d => {
+        const list = Array.isArray(d) ? d : []
+        setSections(list)
+        // Auto-select the section we arrived with, once the list loads
+        if (preselectSectionId && list.some(s => s.id === preselectSectionId)) {
+          setSelectedSection(preselectSectionId)
+        } else {
+          setSelectedSection('')
+        }
+      })
       .finally(() => setLoadingSections(false))
-    setSelectedSection('')
     setAttendanceData(null)
   }, [selectedGrade, selectedYear])
 
@@ -151,50 +181,23 @@ function MarkAttendanceTab() {
   // Save bulk attendance
   const handleSave = async () => {
     if (!attendanceData || saving) return
-    if (!selectedSection || !selectedDate) {
-      setError('Please select a section and date')
-      return
-    }
-
-    setSaving(true)
-    setError('')
-    setSaved(false)
-
+    setSaving(true); setError('')
     try {
       const records = attendanceData.students.map(s => ({
         enrollment_id: s.enrollment_id,
         status:        localStatus[s.enrollment_id]  || 'present',
         remarks:       localRemarks[s.enrollment_id] || null,
       }))
-
-      // Remove null remarks to keep payload clean
-      const cleanRecords = records.map(r => {
-        const rec = { enrollment_id: r.enrollment_id, status: r.status }
-        if (r.remarks) rec.remarks = r.remarks
-        return rec
-      })
-
-      const result = await attendanceApi.bulkMark({
+      await attendanceApi.bulkMark({
         section_id: selectedSection,
         date:       selectedDate,
-        records:    cleanRecords,
+        records,
       })
-
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
-
-      // Reload to show confirmed statuses from server
-      await loadAttendance()
-
+      loadAttendance()
     } catch (e) {
-      const msg = e.response?.data?.detail
-      setError(
-        typeof msg === 'string'
-          ? msg
-          : Array.isArray(msg)
-            ? msg.map(m => m.msg || m.message || JSON.stringify(m)).join(', ')
-            : 'Failed to save attendance. Check backend logs.'
-      )
+      setError(e.response?.data?.detail || 'Failed to save attendance')
     } finally {
       setSaving(false)
     }

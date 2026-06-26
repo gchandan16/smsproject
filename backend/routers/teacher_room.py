@@ -93,6 +93,9 @@ def create_teacher(
     db:   Session = Depends(get_db),
     cu:   User    = Depends(get_current_user),
 ):
+    # Step 1: create the teacher record on its own — this must succeed
+    # independently of subject linking, so a teacher_subjects issue never
+    # silently loses the whole teacher.
     try:
         result = db.execute(text("""
             INSERT INTO teachers
@@ -112,26 +115,38 @@ def create_teacher(
             "desig":  data.designation,
             "active": data.is_active,
         }).fetchone()
-
-        teacher_id = str(result.id)
-
-        # Link subjects
-        for sid in data.subject_ids:
-            db.execute(text("""
-                INSERT INTO teacher_subjects (teacher_id, subject_id)
-                VALUES (:tid, :sid)
-                ON CONFLICT DO NOTHING
-            """), {"tid": teacher_id, "sid": sid})
-
         db.commit()
-        return {"id": teacher_id, "name": data.name, "message": "Teacher created"}
-
+        teacher_id = str(result.id)
     except Exception as e:
         db.rollback()
         err = str(e).lower()
         if "unique" in err or "duplicate" in err:
             raise HTTPException(409, f"Employee No '{data.employee_no}' already exists")
-        raise HTTPException(500, f"Failed: {str(e)}")
+        raise HTTPException(500, f"Failed to create teacher: {str(e)}")
+
+    # Step 2: link subjects — best-effort, does not roll back the teacher
+    subject_warning = None
+    if data.subject_ids:
+        try:
+            for sid in data.subject_ids:
+                db.execute(text("""
+                    INSERT INTO teacher_subjects (teacher_id, subject_id)
+                    VALUES (:tid, :sid)
+                    ON CONFLICT DO NOTHING
+                """), {"tid": teacher_id, "sid": sid})
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            subject_warning = (
+                "Teacher was saved, but subjects could not be linked: "
+                f"{str(e).splitlines()[0]}. The teacher_subjects table may be "
+                "missing — run fix_teacher_subjects.sql."
+            )
+
+    response = {"id": teacher_id, "name": data.name, "message": "Teacher created"}
+    if subject_warning:
+        response["warning"] = subject_warning
+    return response
 
 
 @router.put("/teachers/{teacher_id}")

@@ -4,6 +4,7 @@ from datetime import date
 from typing import Optional, List
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from logger_config import logger
 
 from repositories.attendance_repository import AttendanceRepository, HolidayRepository
 from models.attendance import Holiday
@@ -34,6 +35,17 @@ class AttendanceService:
     # ── Bulk mark ─────────────────────────────────────────────
     def bulk_mark(self, tenant_id, section_id, att_date,
                   records, marked_by, period_no=None):
+
+        logger.info(
+            "Attandance record created - tenant_id=%s, section_id=%s, att_date=%s, period_no=%s, records=%s,marked_by=%s,period_no=%s",
+            tenant_id,
+            section_id,
+            att_date,
+            period_no,
+            records,
+            marked_by,
+            period_no
+        )          
         if not records:
             raise HTTPException(400, "No records provided")
         for rec in records:
@@ -41,7 +53,8 @@ class AttendanceService:
         try:
             count = self.repo.bulk_upsert(
                 tenant_id=tenant_id, records=records,
-                att_date=att_date, marked_by=marked_by, period_no=period_no,
+                att_date=att_date, marked_by=marked_by
+                #, period_no=period_no,
             )
             self.db.commit()
             summary = {}
@@ -61,10 +74,18 @@ class AttendanceService:
     # ── Get section attendance ────────────────────────────────
     def get_section_attendance(self, section_id, tenant_id, att_date, period_no=None):
         try:
+            logger.info(
+                    "section_id=%s, tenant_id=%s, att_date=%s, period_no=%s",
+                    section_id,
+                    tenant_id,
+                    att_date,
+                    period_no
+                )
+
             students       = self.repo.get_section_date_attendance(section_id, tenant_id, att_date, period_no)
             already_marked = self.repo.check_already_marked(section_id, att_date, period_no)
             is_holiday     = self.holiday_repo.is_holiday(tenant_id, att_date)
-            return {
+            result = {
                 "date":           str(att_date),
                 "section_id":     str(section_id),
                 "already_marked": already_marked,
@@ -72,6 +93,11 @@ class AttendanceService:
                 "students":       students,
                 "total":          len(students),
             }
+            logger.info(
+                    "students=%s, already_marked=%s, is_holiday=%s",
+                   result["students"], result["already_marked"], result["is_holiday"]
+                )
+            return result
         except Exception as e:
             raise HTTPException(500, f"Failed to load attendance: {str(e)}")
 
