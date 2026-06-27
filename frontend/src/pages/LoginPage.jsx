@@ -461,7 +461,7 @@ export default function LoginPage() {
           <div className="sms-demo">
             <div className="sms-demo-icon"><i className="bi bi-key"></i></div>
             <div className="sms-demo-text">
-              Demo credentials — <code>rahul@demoschool.com</code> / <code>Admin@123</code>
+              Demo credentials — <code>yogesh@ymail.com</code> / <code>P@ssword1</code>
             </div>
           </div>
 
