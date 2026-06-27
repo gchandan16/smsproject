@@ -6,10 +6,9 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
-    name: Build and Deploy
+  build-frontend:
+    name: Build React Frontend
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,13 +16,13 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
-      - name: Install frontend dependencies
+      - name: Install dependencies
         working-directory: frontend
         run: npm ci
 
-      - name: Build React frontend
+      - name: Build React app
         working-directory: frontend
         run: |
           echo "VITE_API_URL=/api" > .env.production
@@ -39,31 +38,61 @@ jobs:
       - name: Upload frontend to S3
         run: |
           aws s3 sync frontend/dist/ s3://${{ secrets.S3_BUCKET_NAME }}/ --delete
-          echo "Frontend uploaded to S3 successfully"
+          echo "Frontend deployed to S3!"
 
-      - name: Deploy backend to EC2
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
+  deploy-backend:
+    name: Deploy Backend to EC2
+    runs-on: ubuntu-latest
+    needs: build-frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to EC2
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=30 \
+              ubuntu@${{ secrets.EC2_HOST }} << 'ENDSSH'
             set -e
-            echo "=== Pulling latest code ==="
-            cd /home/ubuntu/app
-            if [ -d ".git" ]; then
+            echo "=== Starting deployment ==="
+
+            # Clone or pull latest code
+            if [ -d "/home/ubuntu/app/.git" ]; then
+              cd /home/ubuntu/app
               git pull origin main
             else
-              git clone https://github.com/gchandan16/smsproject.git .
+              cd /home/ubuntu
+              rm -rf app
+              mkdir -p app
+              git clone https://github.com/gchandan16/smsproject.git app
             fi
-            echo "=== Installing dependencies ==="
+
+            # Install Python dependencies
             cd /home/ubuntu/app/backend
             python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
-            echo "=== Restarting FastAPI ==="
+
+            # Restart FastAPI service
+            sudo systemctl daemon-reload
             sudo systemctl restart sms
             sleep 3
-            sudo systemctl status sms
-            echo "=== Deployment complete! ==="
+
+            # Check status
+            if sudo systemctl is-active --quiet sms; then
+              echo "=== FastAPI is running! Deployment successful! ==="
+            else
+              echo "=== ERROR: FastAPI failed to start ==="
+              sudo journalctl -u sms --no-pager -n 20
+              exit 1
+            fi
+          ENDSSH
