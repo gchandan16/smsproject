@@ -458,12 +458,7 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="sms-demo">
-            <div className="sms-demo-icon"><i className="bi bi-key"></i></div>
-            <div className="sms-demo-text">
-              Demo credentials — <code>yogesh@ymail.com</code> / <code>P@ssword1</code>
-            </div>
-          </div>
+    
 
           <p className="sms-footer">
             &copy; {new Date().getFullYear()} School Management System
