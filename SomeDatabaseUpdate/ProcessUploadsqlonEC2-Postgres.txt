@@ -1,0 +1,11 @@
+Step 1 — Upload the SQL file from your local machine to EC2:
+
+scp -i /d/sms/schoollogin.pem /d/sp_list_students.sql ubuntu@13.62.168.108:/home/ubuntu/
+
+
+Step 2 — SSH into EC2:
+ssh -i /d/sms/schoollogin.pem ubuntu@13.62.168.108
+
+Step 3 — Run the SQL fix:
+
+sudo -u postgres psql -d sms_db -f /home/ubuntu/sp_list_students.sql

@@ -2,7 +2,7 @@
 from uuid import UUID
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session, joinedload, contains_eager
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, text
 
 from repositories.base import BaseRepository
 from models.student import Student, Guardian, Grade, Section, StudentEnrollment
@@ -35,7 +35,7 @@ class StudentRepository(BaseRepository[Student]):
             .first()
         )
 
-    # ── List with search + pagination ────────────────────────
+    # ── List with search + pagination (via stored function) ──
     def list_students(
         self,
         tenant_id:   UUID,
@@ -47,60 +47,42 @@ class StudentRepository(BaseRepository[Student]):
         academic_year_id: Optional[UUID] = None,
         skip:        int = 0,
         limit:       int = 50,
-    ) -> Tuple[List[Student], int]:
-        """Returns (students, total_count) for pagination."""
-        q = (
-            self.db.query(Student)
-            .filter(Student.tenant_id == tenant_id)
-        )
+    ) -> Tuple[List[dict], int]:
+        """
+        Returns (students, total_count) for pagination.
 
-        if is_active is not None:
-            q = q.filter(Student.is_active == is_active)
+        Calls fn_list_students(...) — a Postgres function that returns the
+        paginated rows AND the total count (via a window function) in a
+        single round-trip, instead of running a separate COUNT(*) query.
 
-        if gender:
-            q = q.filter(Student.gender == gender)
+        NOTE: this returns plain dicts (not SQLAlchemy Student ORM objects),
+        since the function already joins in the section/grade label directly.
+        The service layer's StudentOut mapping must read from dict keys
+        instead of ORM attributes when this path is used.
+        """
+        rows = self.db.execute(
+            text("""
+                SELECT * FROM fn_list_students(
+                    :tenant_id, :search, :gender, :is_active,
+                    :grade_id, :section_id, :academic_year_id,
+                    :skip, :limit
+                )
+            """),
+            {
+                "tenant_id": str(tenant_id),
+                "search": search,
+                "gender": gender,
+                "is_active": is_active,
+                "grade_id": str(grade_id) if grade_id else None,
+                "section_id": str(section_id) if section_id else None,
+                "academic_year_id": str(academic_year_id) if academic_year_id else None,
+                "skip": skip,
+                "limit": limit,
+            },
+        ).mappings().all()
 
-        if search:
-            term = f"%{search}%"
-            q = q.filter(or_(
-                Student.first_name.ilike(term),
-                Student.last_name.ilike(term),
-                Student.admission_no.ilike(term),
-            ))
-
-        # Filter by grade or section via enrollment join
-        if grade_id or section_id or academic_year_id:
-            q = q.join(StudentEnrollment,
-                       StudentEnrollment.student_id == Student.id)
-            if academic_year_id:
-                q = q.filter(StudentEnrollment.academic_year_id == academic_year_id)
-            if section_id:
-                q = q.filter(StudentEnrollment.section_id == section_id)
-            if grade_id:
-                q = q.join(Section, Section.id == StudentEnrollment.section_id)
-                q = q.filter(Section.grade_id == grade_id)
-
-        # Count on the bare filtered query — no eager-load joins attached yet,
-        # so this is a single lightweight COUNT(*) instead of scanning joined rows.
-        total = q.with_entities(func.count(func.distinct(Student.id))).scalar()
-
-        students = (
-            q.options(
-                # Only eager-load the ACTIVE enrollment's section/grade — this is
-                # the only enrollment _build_section_label() ever actually reads.
-                # Loading every historical enrollment per student (the old behavior)
-                # multiplied join rows for no reason and was the main cause of the
-                # slow list page.
-                joinedload(
-                    Student.enrollments.and_(StudentEnrollment.status == "active")
-                ).joinedload(StudentEnrollment.section)
-                 .joinedload(Section.grade)
-            )
-            .order_by(Student.first_name)
-            .offset(skip)
-            .limit(limit)
-            .all()
-        )
+        total = rows[0]["total_count"] if rows else 0
+        students = [dict(r) for r in rows]
         return students, total
 
     # ── Counts ────────────────────────────────────────────────
