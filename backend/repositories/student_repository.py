@@ -80,12 +80,21 @@ class StudentRepository(BaseRepository[Student]):
                 q = q.join(Section, Section.id == StudentEnrollment.section_id)
                 q = q.filter(Section.grade_id == grade_id)
 
-        total = q.count()
+        # Count on the bare filtered query — no eager-load joins attached yet,
+        # so this is a single lightweight COUNT(*) instead of scanning joined rows.
+        total = q.with_entities(func.count(func.distinct(Student.id))).scalar()
+
         students = (
             q.options(
-                joinedload(Student.enrollments)
-                    .joinedload(StudentEnrollment.section)
-                    .joinedload(Section.grade)
+                # Only eager-load the ACTIVE enrollment's section/grade — this is
+                # the only enrollment _build_section_label() ever actually reads.
+                # Loading every historical enrollment per student (the old behavior)
+                # multiplied join rows for no reason and was the main cause of the
+                # slow list page.
+                joinedload(
+                    Student.enrollments.and_(StudentEnrollment.status == "active")
+                ).joinedload(StudentEnrollment.section)
+                 .joinedload(Section.grade)
             )
             .order_by(Student.first_name)
             .offset(skip)

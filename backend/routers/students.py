@@ -348,6 +348,15 @@ def get_student(
 ):
     return service.get_student(student_id, current_user.tenant_id)
 
+@router.get("/{student_id}", response_model=StudentOut)
+def get_student(
+    student_id:   UUID,
+    service:      StudentService = Depends(get_service),
+    current_user: User           = Depends(get_current_user),
+):
+    """Fetch full details for a single student — used by the student details page."""
+    return service.get_student(student_id, current_user.tenant_id)
+
 
 @router.put("/{student_id}", response_model=StudentOut)
 def update_student(
